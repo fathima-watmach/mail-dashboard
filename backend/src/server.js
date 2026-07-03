@@ -12,7 +12,7 @@ const zohoAuthRoutes = require("./routes/zohoAuth");
 const dashboardRoutes = require("./routes/dashboard");
 const peopleRoutes   = require("./routes/people");
 const calendarRoutes = require("./routes/calendar");
-const { ingestAll } = require("./services/ingest");
+const { ingestAll, reclassifyUnclassified } = require("./services/ingest");
 
 const app = express();
 const isProd = process.env.NODE_ENV === "production";
@@ -63,16 +63,18 @@ app.listen(PORT, () => {
   console.log(`Login at http://localhost:${PORT}/auth/login`);
 });
 
-// ---- Periodic ingestion ----
-// Runs every hour. Adjust the cron expression as needed once you have a
-// feel for how fresh the data needs to be vs. how much it costs to refresh.
+// Hourly: fetch new emails (last 7 days only — fast, small batch)
 cron.schedule("0 * * * *", () => {
-  console.log("[cron] Running scheduled ingestion...");
   ingestAll().catch((err) => console.error("[cron] Ingestion run failed:", err.message));
 });
 
-// On startup, do a full financial-year backfill for Zoho so no emails are missed
+// Every 2 hours: slowly reclassify any emails that failed classification (rate-limit recovery)
+cron.schedule("0 */2 * * *", () => {
+  reclassifyUnclassified().catch((err) => console.error("[reclassify] Cron failed:", err.message));
+});
+
+// On startup: historical ingest only for NEW users (0 emails); existing users get 7-day catch-up
 setTimeout(() => {
-  console.log("[startup] Running historical ingestion (financial year)...");
-  ingestAll({ historical: true }).catch((err) => console.error("[startup] Historical ingestion failed:", err.message));
+  console.log("[startup] Running ingestion...");
+  ingestAll({ historical: true }).catch((err) => console.error("[startup] Ingestion failed:", err.message));
 }, 5000);
