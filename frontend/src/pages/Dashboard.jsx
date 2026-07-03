@@ -42,24 +42,21 @@ export default function Dashboard({ user, onLogout }) {
   const handleLogout = async () => { await logout(); onLogout(); };
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-white">
       {/* Header */}
-      <header className="bg-navy border-b border-navy-border px-6 py-3 flex items-center justify-between sticky top-0 z-10 shadow-lg">
+      <header className="bg-brand px-6 py-3 flex items-center justify-between sticky top-0 z-10">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 bg-brand rounded-lg flex items-center justify-center">
+          <div className="w-8 h-8 bg-white/20 rounded-lg flex items-center justify-center">
             <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                 d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
             </svg>
           </div>
-          <div>
-            <span className="font-bold text-white tracking-wide">WATMACH</span>
-            <span className="ml-2 text-xs bg-navy-muted text-brand-muted px-2 py-0.5 rounded-full">{user.email}</span>
-          </div>
+          <span className="font-semibold text-white tracking-wide">WATMACH</span>
         </div>
         <div className="flex items-center gap-4">
-          <span className="text-sm text-gray-400 hidden sm:block">{user.email}</span>
-          <button onClick={handleLogout} className="text-sm text-gray-400 hover:text-white transition-colors">
+          <span className="text-sm text-white/70 hidden sm:block">{user.email}</span>
+          <button onClick={handleLogout} className="text-sm text-white/70 hover:text-white transition-colors">
             Sign out
           </button>
         </div>
@@ -67,13 +64,13 @@ export default function Dashboard({ user, onLogout }) {
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
         {/* Tabs */}
-        <div className="flex gap-0.5 mb-6 border-b border-gray-200 overflow-x-auto">
+        <div className="flex gap-0.5 mb-6 border-b border-gray-100 overflow-x-auto">
           {TABS.map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
-              className={`px-4 py-2 text-sm font-medium capitalize whitespace-nowrap transition-colors border-b-2 -mb-px
-                ${tab === t ? "border-brand text-brand" : "border-transparent text-gray-500 hover:text-navy"}`}
+              className={`px-4 py-2.5 text-sm font-medium capitalize whitespace-nowrap transition-colors border-b-2 -mb-px
+                ${tab === t ? "border-brand text-brand" : "border-transparent text-gray-400 hover:text-gray-700"}`}
             >
               {t}
               {t === "escalations" && summary.escalations > 0 && (
