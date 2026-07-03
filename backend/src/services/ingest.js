@@ -117,7 +117,7 @@ async function ingestForPerson(personId, personEmail, provider = "microsoft", zo
         ]
       );
       newCount++;
-      await sleep(2000); // 2s between classifications — stays within Groq's 30 RPM free tier
+      await sleep(5000); // 5s between classifications — 12/min, leaves headroom for interactive calls
     } catch (err) {
       errorCount++;
       console.error(`[ingest] Failed for message:`, err.message);

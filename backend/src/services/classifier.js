@@ -24,22 +24,22 @@ const DEPARTMENTS = [
 ];
 
 function buildClassificationPrompt(email) {
-  return `You are classifying a business email for a CEO dashboard.
+  return `You are classifying a business email for an executive dashboard.
 
 Departments (pick exactly one): ${DEPARTMENTS.join(", ")}
 
 Email:
 From: ${email.fromName} <${email.fromEmail}>
 Subject: ${email.subject}
-Directly addressed to CEO (not just CC'd): ${email.isDirectToOwner}
+Directly addressed to the recipient (not just CC'd): ${email.isDirectToOwner}
 Body preview: ${email.bodyPreview}
 
 Decide:
 1. department: which department this belongs to
-2. urgency: "action_needed" if the CEO must personally act or decide, "fyi" if awareness only
+2. urgency: "action_needed" if the recipient must personally act or decide, "fyi" if awareness only
 3. is_escalation: true ONLY for real business problems — broken equipment, customer complaints, supplier failures, financial risks, or security incidents. NEVER for test emails, welcome messages, event invitations, routine order updates, payment notifications, or informational emails.
 4. is_critical: true ONLY if this requires action TODAY — explicit today deadline, severe ongoing outage, or sender is waiting right now. false otherwise.
-5. summary: 1-2 plain-English sentences: what is this email about and what action (if any) is needed
+5. summary: 1-2 plain-English sentences describing what this email is about and what action (if any) is needed. Do NOT mention "CEO", "executive", or the recipient's role — write neutrally.
 6. reasoning: one short sentence explaining your urgency/escalation decision
 
 Respond with ONLY valid JSON, no markdown, in this exact shape:
@@ -91,24 +91,28 @@ async function classifyWithDeepSeek(email) {
   };
 }
 
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
 async function classifyWithGroq(email) {
   const prompt = buildClassificationPrompt(email);
 
-  const response = await axios.post(
-    "https://api.groq.com/openai/v1/chat/completions",
-    {
-      model: process.env.GROQ_MODEL || "llama-3.3-70b-versatile",
-      messages: [{ role: "user", content: prompt }],
-      temperature: 0,
-      max_tokens: 600,
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
-        "Content-Type": "application/json",
-      },
+  let response;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      response = await axios.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        { model: process.env.GROQ_MODEL || "llama-3.3-70b-versatile", messages: [{ role: "user", content: prompt }], temperature: 0, max_tokens: 600 },
+        { headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" } }
+      );
+      break;
+    } catch (err) {
+      if (err.response?.status === 429 && attempt < 3) {
+        const wait = attempt * 15000;
+        console.warn(`[classifier] Groq rate limited, retrying in ${wait / 1000}s...`);
+        await sleep(wait);
+      } else throw err;
     }
-  );
+  }
 
   const rawText = response.data.choices[0].message.content.trim();
 
