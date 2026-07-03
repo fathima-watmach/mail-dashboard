@@ -71,9 +71,8 @@ cron.schedule("0 * * * *", () => {
   ingestAll().catch((err) => console.error("[cron] Ingestion run failed:", err.message));
 });
 
-// Also do one ingestion run shortly after server start, so you don't have
-// to wait an hour to see data during testing.
+// On startup, do a full financial-year backfill for Zoho so no emails are missed
 setTimeout(() => {
-  console.log("[startup] Running initial ingestion pass...");
-  ingestAll().catch((err) => console.error("[startup] Initial ingestion failed:", err.message));
+  console.log("[startup] Running historical ingestion (financial year)...");
+  ingestAll({ historical: true }).catch((err) => console.error("[startup] Historical ingestion failed:", err.message));
 }, 5000);

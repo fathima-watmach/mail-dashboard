@@ -7,7 +7,7 @@ const { fetchRecentMessages: fetchZoho, normalizeMessage: normalizeZoho } = requ
 const { classifyEmail }   = require("./classifier");
 const { attributePerson } = require("./attribution");
 
-async function ingestForPerson(personId, personEmail, provider = "microsoft", zohoAccountId = null, since = null) {
+async function ingestForPerson(personId, personEmail, provider = "microsoft", zohoAccountId = null, since = null, limit = 100) {
   console.log(`[ingest] Starting for person_id=${personId} (${personEmail}) provider=${provider}`);
 
   const aliasRow = await pool.query(`SELECT email_aliases FROM people WHERE id = $1`, [personId]);
@@ -18,7 +18,7 @@ async function ingestForPerson(personId, personEmail, provider = "microsoft", zo
 
   if (provider === "zoho") {
     accessToken = await getZohoToken(personId);
-    rawMessages = await fetchZoho(accessToken, zohoAccountId, { limit: 100, since });
+    rawMessages = await fetchZoho(accessToken, zohoAccountId, { limit, since });
     console.log(`[ingest] Fetched ${rawMessages.length} messages from Zoho`);
   } else {
     accessToken = await getMsToken(personId);
@@ -126,7 +126,14 @@ async function ingestForPerson(personId, personEmail, provider = "microsoft", zo
   return { newCount, skippedCount, errorCount };
 }
 
-async function ingestAll() {
+function getFinancialYearStart() {
+  const now = new Date();
+  // Financial year starts April 1; if we're before April, use previous year
+  const fyYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+  return new Date(fyYear, 3, 1).toISOString(); // April 1 00:00:00
+}
+
+async function ingestAll({ historical = false } = {}) {
   // Microsoft accounts
   const { rows: msUsers } = await pool.query(
     `SELECT id, email FROM people WHERE ms_graph_connected = true`
@@ -147,10 +154,19 @@ async function ingestAll() {
     catch (err) { console.error(`[ingest] MS failure for ${p.email}:`, err.message); }
   }
 
-  // For recurring ingest, only pull the last 7 days from Zoho (avoids re-processing old mail)
-  const zohoSince = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  // Historical (startup): pull full financial year with higher limit
+  // Recurring (cron): pull last 7 days only to avoid re-processing
+  const zohoSince = historical
+    ? getFinancialYearStart()
+    : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const zohoLimit = historical ? 500 : 100;
+
+  if (historical) {
+    console.log(`[ingest] Historical run — fetching Zoho emails since ${zohoSince}`);
+  }
+
   for (const p of zohoUsers) {
-    try { await ingestForPerson(p.id, p.email, "zoho", p.zoho_account_id, zohoSince); }
+    try { await ingestForPerson(p.id, p.email, "zoho", p.zoho_account_id, zohoSince, zohoLimit); }
     catch (err) { console.error(`[ingest] Zoho failure for ${p.email}:`, err.message); }
   }
 }
