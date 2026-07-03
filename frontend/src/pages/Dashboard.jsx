@@ -102,7 +102,7 @@ export default function Dashboard({ user, onLogout }) {
             </div>
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               <StatCard label="Total emails"   value={summary.total}        color="blue"  onClick={() => setTab("all emails")} />
-              <StatCard label="Highly Critical" value={summary.critical}    color="red"   sub="Action today"    onClick={() => setTab("escalations")} />
+              <StatCard label="Highly Critical" value={summary.critical}    color="red"   sub="Action today"    onClick={() => setTab("action needed")} />
               <StatCard label="Action Needed"  value={summary.actionNeeded} color="amber" sub="Direct to you"   onClick={() => setTab("action needed")} />
               <StatCard label="Escalations"    value={summary.escalations}  color="green" sub="Needs attention" onClick={() => setTab("escalations")} />
             </div>
