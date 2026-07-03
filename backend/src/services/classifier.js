@@ -1,5 +1,5 @@
 const axios = require("axios");
-const { callGemini } = require("./geminiQueue");
+const { callLlm } = require("./llmQueue");
 
 /**
  * Provider-agnostic classification interface.
@@ -97,23 +97,12 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 async function classifyWithGroq(email) {
   const prompt = buildClassificationPrompt(email);
 
-  let response;
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      response = await axios.post(
-        "https://api.groq.com/openai/v1/chat/completions",
-        { model: process.env.GROQ_CLASSIFY_MODEL || "llama-3.1-8b-instant", messages: [{ role: "user", content: prompt }], temperature: 0, max_tokens: 300 },
-        { headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" } }
-      );
-      break;
-    } catch (err) {
-      if (err.response?.status === 429 && attempt < 3) {
-        const wait = attempt * 15000;
-        console.warn(`[classifier] Groq rate limited, retrying in ${wait / 1000}s...`);
-        await sleep(wait);
-      } else throw err;
-    }
-  }
+  // Routes through the global queue — serialized with thread summaries and all other calls
+  const response = await callLlm(() => axios.post(
+    "https://api.groq.com/openai/v1/chat/completions",
+    { model: process.env.GROQ_CLASSIFY_MODEL || "llama-3.1-8b-instant", messages: [{ role: "user", content: prompt }], temperature: 0, max_tokens: 300 },
+    { headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" } }
+  ));
 
   const rawText = response.data.choices[0].message.content.trim();
 
@@ -144,8 +133,7 @@ async function classifyWithGroq(email) {
 async function classifyWithGemini(email) {
   const prompt = buildClassificationPrompt(email);
 
-  // All Gemini calls share a global queue — no manual retry needed here
-  const response = await callGemini(() => axios.post(
+  const response = await callLlm(() => axios.post(
     "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
     {
       model: process.env.GEMINI_CLASSIFY_MODEL || "gemini-2.0-flash",

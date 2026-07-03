@@ -1,5 +1,5 @@
 const axios = require("axios");
-const { callGemini } = require("./geminiQueue");
+const { callLlm } = require("./llmQueue");
 
 function extractJson(raw) {
   const objStart = raw.indexOf("{");
@@ -17,9 +17,18 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function callLLM(prompt, { maxTokens = 800, retries = 3 } = {}) {
   const provider = process.env.CLASSIFIER_PROVIDER || "deepseek";
 
-  // Gemini goes through the shared rate-limit queue — no retry loop needed here
+  // Groq and Gemini go through the shared rate-limit queue — serialized with the classifier
+  if (provider === "groq") {
+    const r = await callLlm(() => axios.post(
+      "https://api.groq.com/openai/v1/chat/completions",
+      { model: process.env.GROQ_MODEL || "llama-3.1-8b-instant", messages: [{ role: "user", content: prompt }], temperature: 0, max_tokens: maxTokens },
+      { headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" } }
+    ));
+    return r.data.choices[0].message.content.trim();
+  }
+
   if (provider === "gemini") {
-    const r = await callGemini(() => axios.post(
+    const r = await callLlm(() => axios.post(
       "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
       { model: process.env.GEMINI_MODEL || "gemini-2.0-flash", messages: [{ role: "user", content: prompt }], temperature: 0, max_tokens: maxTokens },
       { headers: { Authorization: `Bearer ${process.env.GEMINI_API_KEY}`, "Content-Type": "application/json" } }
@@ -27,18 +36,9 @@ async function callLLM(prompt, { maxTokens = 800, retries = 3 } = {}) {
     return r.data.choices[0].message.content.trim();
   }
 
-  // Other providers use a simple retry loop
+  // DeepSeek / Ollama use a simple retry loop (not queue-managed)
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      if (provider === "groq") {
-        const r = await axios.post(
-          "https://api.groq.com/openai/v1/chat/completions",
-          { model: process.env.GROQ_MODEL || "llama-3.3-70b-versatile", messages: [{ role: "user", content: prompt }], temperature: 0, max_tokens: maxTokens },
-          { headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" } }
-        );
-        return r.data.choices[0].message.content.trim();
-      }
-
       if (provider === "deepseek") {
         const r = await axios.post(
           `${process.env.DEEPSEEK_BASE_URL}/chat/completions`,

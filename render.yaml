@@ -27,13 +27,13 @@ services:
       - key: ZOHO_REDIRECT_URI
         sync: false
       - key: CLASSIFIER_PROVIDER
-        value: gemini
-      - key: GEMINI_API_KEY
+        value: groq
+      - key: GROQ_API_KEY
         sync: false
-      - key: GEMINI_MODEL
-        value: gemini-2.0-flash
-      - key: GEMINI_CLASSIFY_MODEL
-        value: gemini-2.0-flash
+      - key: GROQ_MODEL
+        value: llama-3.1-8b-instant
+      - key: GROQ_CLASSIFY_MODEL
+        value: llama-3.1-8b-instant
       - key: SESSION_SECRET
         generateValue: true
       - key: FRONTEND_URL
