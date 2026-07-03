@@ -140,6 +140,58 @@ async function classifyWithGroq(email) {
   };
 }
 
+async function classifyWithGemini(email) {
+  const prompt = buildClassificationPrompt(email);
+
+  let response;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      response = await axios.post(
+        "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        {
+          model: process.env.GEMINI_CLASSIFY_MODEL || "gemini-2.0-flash",
+          messages: [{ role: "user", content: prompt }],
+          temperature: 0,
+          max_tokens: 300,
+        },
+        { headers: { Authorization: `Bearer ${process.env.GEMINI_API_KEY}`, "Content-Type": "application/json" } }
+      );
+      break;
+    } catch (err) {
+      if (err.response?.status === 429 && attempt < 3) {
+        const wait = attempt * 10000;
+        console.warn(`[classifier] Gemini rate limited, retrying in ${wait / 1000}s...`);
+        await sleep(wait);
+      } else throw err;
+    }
+  }
+
+  const rawText = response.data.choices[0].message.content.trim();
+
+  let parsed;
+  try {
+    const cleaned = rawText.replace(/^```json\s*|\s*```$/g, "");
+    parsed = JSON.parse(cleaned);
+  } catch (err) {
+    throw new Error(`Failed to parse Gemini classifier response as JSON: ${rawText}`);
+  }
+
+  if (!DEPARTMENTS.includes(parsed.department)) {
+    parsed.department = "Operations & Procurement";
+    parsed.reasoning = (parsed.reasoning || "") + " [fallback: unrecognized department from model]";
+  }
+
+  return {
+    department: parsed.department,
+    urgency: parsed.urgency === "action_needed" ? "action_needed" : "fyi",
+    isEscalation: Boolean(parsed.is_escalation),
+    isCritical: Boolean(parsed.is_critical),
+    summary: parsed.summary || "",
+    reasoning: parsed.reasoning || "",
+    raw: response.data,
+  };
+}
+
 async function classifyWithOllama(email) {
   const prompt = buildClassificationPrompt(email);
 
@@ -182,6 +234,8 @@ async function classifyWithOllama(email) {
 async function classifyEmail(email) {
   const provider = process.env.CLASSIFIER_PROVIDER || "deepseek";
   switch (provider) {
+    case "gemini":
+      return classifyWithGemini(email);
     case "deepseek":
       return classifyWithDeepSeek(email);
     case "groq":

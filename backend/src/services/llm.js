@@ -18,6 +18,15 @@ async function callLLM(prompt, { maxTokens = 800, retries = 3 } = {}) {
 
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
+      if (provider === "gemini") {
+        const r = await axios.post(
+          "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+          { model: process.env.GEMINI_MODEL || "gemini-2.0-flash", messages: [{ role: "user", content: prompt }], temperature: 0, max_tokens: maxTokens },
+          { headers: { Authorization: `Bearer ${process.env.GEMINI_API_KEY}`, "Content-Type": "application/json" } }
+        );
+        return r.data.choices[0].message.content.trim();
+      }
+
       if (provider === "groq") {
         const r = await axios.post(
           "https://api.groq.com/openai/v1/chat/completions",

@@ -27,13 +27,13 @@ services:
       - key: ZOHO_REDIRECT_URI
         sync: false
       - key: CLASSIFIER_PROVIDER
-        value: deepseek
-      - key: DEEPSEEK_API_KEY
+        value: gemini
+      - key: GEMINI_API_KEY
         sync: false
-      - key: DEEPSEEK_BASE_URL
-        value: https://api.deepseek.com
-      - key: DEEPSEEK_MODEL
-        value: deepseek-chat
+      - key: GEMINI_MODEL
+        value: gemini-2.0-flash
+      - key: GEMINI_CLASSIFY_MODEL
+        value: gemini-2.0-flash
       - key: SESSION_SECRET
         generateValue: true
       - key: FRONTEND_URL
