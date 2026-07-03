@@ -4,7 +4,7 @@
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-const INTERVAL_MS = 2200; // 27 calls/min — under Groq free tier 30 RPM
+const INTERVAL_MS = 2500; // 24 calls/min — under Groq free tier 30 RPM, leaves TPM headroom
 
 const queue = [];
 let draining = false;
@@ -23,9 +23,9 @@ async function drain() {
       resolve(await fn());
     } catch (err) {
       if (err.response?.status === 429) {
-        // Back off 30s before the next queued call
-        console.warn("[llm-queue] 429 rate limit hit — backing off 30s");
-        lastCallAt = Date.now() + 30000;
+        // Back off 60s — Groq uses a rolling 1-min TPM window; 30s isn't enough
+        console.warn("[llm-queue] 429 rate limit hit — backing off 60s");
+        lastCallAt = Date.now() + 60000;
       }
       reject(err);
     }

@@ -212,11 +212,11 @@ Return ONLY a JSON array, no markdown:
 [{"date":"...","from":"...","summary":"..."},...]
 
 Email thread:
-${cleanBody.slice(0, 15000)}`;
+${cleanBody.slice(0, 8000)}`;
 
   let entries = [];
   try {
-    const raw = await callLLM(prompt, { maxTokens: 1500 });
+    const raw = await callLLM(prompt, { maxTokens: 800 });
     console.log(`[thread-summary] LLM raw output: ${raw.slice(0, 200)}`);
     entries = extractJson(raw);
     if (!Array.isArray(entries)) entries = [];
