@@ -15,6 +15,16 @@ export default function ThreadSummary({ emailId }) {
     setState("loading");
     try {
       const res = await fetch(`/api/dashboard/emails/${emailId}/thread-summary`, { credentials: "include" });
+
+      // Render's free tier serves an HTML wakeup page on cold start —
+      // catch that before trying to parse as JSON
+      const contentType = res.headers.get("content-type") || "";
+      if (!contentType.includes("application/json")) {
+        setErrMsg("Server is starting up — please try again in 30 seconds");
+        setState("error");
+        return;
+      }
+
       const data = await res.json();
       if (!res.ok) {
         setErrMsg(data.error || `Error ${res.status}`);
@@ -25,11 +35,10 @@ export default function ThreadSummary({ emailId }) {
         setEntries(data.entries);
         setState("done");
       } else {
-        // Single-message thread — not an error, just nothing to show
         setState("single");
       }
     } catch (err) {
-      setErrMsg(err.message);
+      setErrMsg("Server is starting up — please try again in 30 seconds");
       setState("error");
     }
   };

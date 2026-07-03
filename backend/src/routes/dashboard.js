@@ -200,8 +200,16 @@ router.get("/emails/:id/thread-summary", async (req, res) => {
     console.log(`[thread-summary] body fetch failed, using stored preview: ${e.message}`);
   }
 
-  // Strip HTML tags if body is HTML (common from Graph API)
-  const cleanBody = fullBody.replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/\s{3,}/g, "\n").trim();
+  // Strip HTML — remove block content first, then tags, then decode entities
+  const cleanBody = fullBody
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#\d+;/g, " ")
+    .replace(/\s{3,}/g, "\n")
+    .trim();
 
   const prompt = `You are analysing an email thread (newest message at top, older replies quoted below).
 Extract each distinct message in the thread in CHRONOLOGICAL ORDER (oldest first).
@@ -217,7 +225,14 @@ ${cleanBody.slice(0, 8000)}`;
   let entries = [];
   try {
     const raw = await callLLM(prompt, { maxTokens: 800 });
-    console.log(`[thread-summary] LLM raw output: ${raw.slice(0, 200)}`);
+    console.log(`[thread-summary] LLM raw (first 300): ${raw.slice(0, 300)}`);
+
+    // Guard: LLM echoed back HTML from the email body
+    if (raw.trimStart().startsWith("<")) {
+      console.error("[thread-summary] LLM returned HTML instead of JSON — body likely not cleaned properly");
+      return res.status(500).json({ error: "Could not parse thread — try again" });
+    }
+
     entries = extractJson(raw);
     if (!Array.isArray(entries)) entries = [];
   } catch (e) {
