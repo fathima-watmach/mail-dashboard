@@ -53,6 +53,7 @@ async function ingestForPerson(personId, personEmail, provider = "microsoft", zo
     }
   }
 
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   let newCount = 0, skippedCount = 0, errorCount = 0;
 
   for (const raw of rawMessages) {
@@ -116,6 +117,7 @@ async function ingestForPerson(personId, personEmail, provider = "microsoft", zo
         ]
       );
       newCount++;
+      await sleep(2000); // 2s between classifications — stays within Groq's 30 RPM free tier
     } catch (err) {
       errorCount++;
       console.error(`[ingest] Failed for message:`, err.message);
