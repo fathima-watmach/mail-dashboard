@@ -101,7 +101,7 @@ async function classifyWithGroq(email) {
     try {
       response = await axios.post(
         "https://api.groq.com/openai/v1/chat/completions",
-        { model: process.env.GROQ_MODEL || "llama-3.3-70b-versatile", messages: [{ role: "user", content: prompt }], temperature: 0, max_tokens: 600 },
+        { model: process.env.GROQ_CLASSIFY_MODEL || "llama-3.1-8b-instant", messages: [{ role: "user", content: prompt }], temperature: 0, max_tokens: 300 },
         { headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" } }
       );
       break;
