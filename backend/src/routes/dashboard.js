@@ -206,16 +206,17 @@ router.get("/emails/:id/thread-summary", async (req, res) => {
   const prompt = `You are analysing an email thread (newest message at top, older replies quoted below).
 Extract each distinct message in the thread in CHRONOLOGICAL ORDER (oldest first).
 For each message return: date (best guess from context, e.g. "25 Jun 2026"), from (sender name or email), and a one-sentence summary of what they said or requested.
-Ignore email signatures, legal disclaimers, and blank lines.
+Ignore email signatures, legal disclaimers, footer text, and blank lines.
+If the same message appears quoted multiple times, include it only once.
 Return ONLY a JSON array, no markdown:
 [{"date":"...","from":"...","summary":"..."},...]
 
 Email thread:
-${cleanBody.slice(0, 6000)}`;
+${cleanBody.slice(0, 15000)}`;
 
   let entries = [];
   try {
-    const raw = await callLLM(prompt, { maxTokens: 1000 });
+    const raw = await callLLM(prompt, { maxTokens: 1500 });
     console.log(`[thread-summary] LLM raw output: ${raw.slice(0, 200)}`);
     entries = extractJson(raw);
     if (!Array.isArray(entries)) entries = [];
