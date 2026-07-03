@@ -1,4 +1,5 @@
 const axios = require("axios");
+const { callGemini } = require("./geminiQueue");
 
 /**
  * Provider-agnostic classification interface.
@@ -143,28 +144,17 @@ async function classifyWithGroq(email) {
 async function classifyWithGemini(email) {
   const prompt = buildClassificationPrompt(email);
 
-  let response;
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      response = await axios.post(
-        "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-        {
-          model: process.env.GEMINI_CLASSIFY_MODEL || "gemini-2.0-flash",
-          messages: [{ role: "user", content: prompt }],
-          temperature: 0,
-          max_tokens: 300,
-        },
-        { headers: { Authorization: `Bearer ${process.env.GEMINI_API_KEY}`, "Content-Type": "application/json" } }
-      );
-      break;
-    } catch (err) {
-      if (err.response?.status === 429 && attempt < 3) {
-        const wait = attempt * 10000;
-        console.warn(`[classifier] Gemini rate limited, retrying in ${wait / 1000}s...`);
-        await sleep(wait);
-      } else throw err;
-    }
-  }
+  // All Gemini calls share a global queue — no manual retry needed here
+  const response = await callGemini(() => axios.post(
+    "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    {
+      model: process.env.GEMINI_CLASSIFY_MODEL || "gemini-2.0-flash",
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0,
+      max_tokens: 300,
+    },
+    { headers: { Authorization: `Bearer ${process.env.GEMINI_API_KEY}`, "Content-Type": "application/json" } }
+  ));
 
   const rawText = response.data.choices[0].message.content.trim();
 

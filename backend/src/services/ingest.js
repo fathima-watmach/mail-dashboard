@@ -138,8 +138,8 @@ async function ingestForPerson(personId, personEmail, provider = "microsoft", zo
       console.error(`[ingest] DB insert failed:`, insertErr.message);
     }
 
-    // Always sleep — even on failure — to respect rate limits
-    await sleep(classification ? 5000 : 8000);
+    // No explicit sleep needed here — geminiQueue enforces 4.2s between every
+    // Gemini API call globally (across ingest + thread summaries + reclassify)
   }
 
   console.log(`[ingest] Done for ${personEmail}: ${newCount} new, ${skippedCount} skipped, ${errorCount} errors`);
