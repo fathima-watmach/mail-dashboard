@@ -1,0 +1,1 @@
+ALTER TABLE people ADD COLUMN IF NOT EXISTS email_aliases TEXT[] DEFAULT '{}';
