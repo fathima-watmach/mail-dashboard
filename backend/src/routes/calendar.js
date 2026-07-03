@@ -118,17 +118,16 @@ router.get("/email-events", async (req, res) => {
   const startDT = start || new Date().toISOString().split("T")[0];
   const endDT   = end   || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
 
-  // Get emails in range that haven't been checked yet (meeting_details IS NULL)
-  // AND emails that already have a meeting extracted
+  // Scan ALL unprocessed emails (not just those in the date range) —
+  // an email received last week may mention a meeting scheduled for next month
   const { rows: unchecked } = await pool.query(
     `SELECT id, subject, from_name, from_email, body_preview, received_at
      FROM emails
      WHERE mailbox_owner_id = $1
-       AND received_at >= $2 AND received_at <= $3
        AND meeting_details IS NULL
        AND body_preview IS NOT NULL
-     ORDER BY received_at DESC LIMIT 30`,
-    [personId, startDT, endDT + "T23:59:59"]
+     ORDER BY received_at DESC LIMIT 50`,
+    [personId]
   );
 
   // Extract meetings from unchecked emails
