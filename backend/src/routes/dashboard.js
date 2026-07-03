@@ -150,8 +150,10 @@ router.get("/emails/:id/thread-summary", async (req, res) => {
     return res.status(404).json({ error: "Not found" });
   }
 
-  // Return cached summary if available
-  if (rows[0].thread_summary) {
+  // Clear cache if refresh requested
+  if (req.query.refresh === "true") {
+    await pool.query(`UPDATE emails SET thread_summary = NULL WHERE id = $1`, [req.params.id]);
+  } else if (rows[0].thread_summary) {
     return res.json({ entries: rows[0].thread_summary });
   }
 
@@ -212,11 +214,17 @@ router.get("/emails/:id/thread-summary", async (req, res) => {
     .trim();
 
   const prompt = `You are analysing an email thread (newest message at top, older replies quoted below).
-Extract each distinct message in the thread in CHRONOLOGICAL ORDER (oldest first).
-For each message return: date (best guess from context, e.g. "25 Jun 2026"), from (sender name or email), and a one-sentence summary of what they said or requested.
-Ignore email signatures, legal disclaimers, footer text, and blank lines.
-If the same message appears quoted multiple times, include it only once.
-Return ONLY a JSON array, no markdown:
+Extract each distinct message in CHRONOLOGICAL ORDER (oldest first).
+For each message return: date (from the text, e.g. "25 Jun 2026"), from (sender name or email as written), summary (one sentence).
+
+STRICT RULES — violations are worse than returning fewer entries:
+- ONLY include messages explicitly present in the text below. Do NOT invent any.
+- Do NOT use placeholder names like "John Doe", "Jane Smith", or any name not in the text.
+- If you cannot find a clear sender name, use their email address.
+- Ignore signatures, legal disclaimers, and quoted text that repeats earlier messages.
+- If only one distinct message exists, return an array with one entry.
+- When uncertain whether a message boundary exists, skip it.
+Return ONLY a valid JSON array, no markdown:
 [{"date":"...","from":"...","summary":"..."},...]
 
 Email thread:
@@ -267,6 +275,69 @@ router.post("/emails/:id/action", async (req, res) => {
   );
 
   res.json({ actioned: !!newValue, actioned_at: newValue });
+});
+
+// ── Global search ─────────────────────────────────────────────────────────────
+router.get("/search", async (req, res) => {
+  const { personId } = req.session;
+  const q = (req.query.q || "").trim();
+  if (q.length < 2) return res.json({ emails: [] });
+
+  const { rows } = await pool.query(
+    `SELECT e.id, e.subject, e.from_name, e.from_email, e.received_at,
+            e.to_recipients, e.cc_recipients,
+            e.is_direct_to_owner, e.urgency, e.is_critical, e.summary, e.actioned_at,
+            e.classification_raw, d.name AS department
+     FROM emails e
+     LEFT JOIN departments d ON d.id = e.department_id
+     WHERE e.mailbox_owner_id = $1
+       AND (e.subject       ILIKE $2
+         OR e.from_name     ILIKE $2
+         OR e.from_email    ILIKE $2
+         OR e.summary       ILIKE $2
+         OR e.body_preview  ILIKE $2
+         OR e.to_recipients ILIKE $2)
+     ORDER BY e.received_at DESC
+     LIMIT 50`,
+    [personId, `%${q}%`]
+  );
+
+  res.json({ emails: rows, query: q });
+});
+
+// ── Auto-reply suggestions ─────────────────────────────────────────────────────
+router.get("/emails/:id/reply-suggestions", async (req, res) => {
+  const { personId } = req.session;
+
+  const { rows } = await pool.query(
+    `SELECT subject, from_name, from_email, summary, body_preview
+     FROM emails WHERE id = $1 AND mailbox_owner_id = $2`,
+    [req.params.id, personId]
+  );
+  if (!rows.length) return res.status(404).json({ error: "Not found" });
+
+  const { subject, from_name, summary, body_preview } = rows[0];
+
+  const prompt = `Draft 3 short professional email reply options for this email.
+Subject: ${subject}
+From: ${from_name}
+Context: ${summary || (body_preview || "").slice(0, 200)}
+
+Return ONLY a JSON array of exactly 3 strings (1-2 sentences each), no markdown:
+["option 1","option 2","option 3"]
+
+Options should cover: (1) acknowledge + confirm action, (2) request more info / time, (3) polite defer or partial response.`;
+
+  try {
+    const raw = await callLLM(prompt, { maxTokens: 300 });
+    if (raw.trimStart().startsWith("<")) throw new Error("LLM returned HTML");
+    const suggestions = extractJson(raw);
+    if (!Array.isArray(suggestions)) throw new Error("Not an array");
+    res.json({ suggestions: suggestions.slice(0, 3) });
+  } catch (e) {
+    console.error(`[reply-suggestions] error: ${e.message}`);
+    res.status(500).json({ error: "Could not generate suggestions" });
+  }
 });
 
 router.get("/scores", async (req, res) => {

@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from "react";
-import { getSummary, getBuckets, getEscalations, getActionNeeded, getEmails, logout } from "../api";
+import { getSummary, getBuckets, getEscalations, getActionNeeded, getEmails, logout, searchEmails } from "../api";
 import StatCard from "../components/StatCard";
 import DepartmentGrid from "../components/DepartmentGrid";
 import EscalationList from "../components/EscalationList";
@@ -19,6 +19,10 @@ export default function Dashboard({ user, onLogout }) {
   const [selectedDept, setSelectedDept] = useState(null);
   const [allEmailsLoading, setAllEmailsLoading] = useState(false);
   const [tab, setTab] = useState("overview");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchActive, setSearchActive] = useState(false);
 
   const loadSummary = useCallback(() =>
     getSummary().then(setSummary).catch(console.error), []);
@@ -41,6 +45,24 @@ export default function Dashboard({ user, onLogout }) {
 
   const handleLogout = async () => { await logout(); onLogout(); };
 
+  const handleSearch = async (q) => {
+    const trimmed = q.trim();
+    if (!trimmed) { setSearchActive(false); setSearchResults([]); return; }
+    setSearchActive(true);
+    setSearchLoading(true);
+    try {
+      const data = await searchEmails(trimmed);
+      setSearchResults(data.emails || []);
+    } catch {}
+    setSearchLoading(false);
+  };
+
+  const clearSearch = () => {
+    setSearchActive(false);
+    setSearchQuery("");
+    setSearchResults([]);
+  };
+
   return (
     <div className="min-h-screen bg-white">
       {/* Header */}
@@ -54,7 +76,21 @@ export default function Dashboard({ user, onLogout }) {
           </div>
           <span className="font-semibold text-white tracking-wide">WATMACH</span>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
+          {/* Global search */}
+          <div className="relative hidden sm:block">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") handleSearch(searchQuery); if (e.key === "Escape") clearSearch(); }}
+              placeholder="Search emails…"
+              className="bg-white/15 text-white placeholder-white/50 border border-white/20 rounded-lg pl-8 pr-3 py-1.5 text-sm w-44 focus:outline-none focus:bg-white/20 focus:w-56 transition-all"
+            />
+            <svg className="absolute left-2.5 top-2 w-4 h-4 text-white/50 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+            </svg>
+          </div>
           <span className="text-sm text-white/70 hidden sm:block">{user.email}</span>
           <button onClick={handleLogout} className="text-sm text-white/70 hover:text-white transition-colors">
             Sign out
@@ -63,6 +99,24 @@ export default function Dashboard({ user, onLogout }) {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+        {/* Search results panel */}
+        {searchActive && (
+          <div className="mb-6 bg-white rounded-xl border border-gray-100 shadow-sm p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-sm font-semibold text-gray-700">
+                Search: <span className="text-brand">"{searchQuery}"</span>
+                {!searchLoading && (
+                  <span className="font-normal text-gray-400 ml-2">— {searchResults.length} result{searchResults.length !== 1 ? "s" : ""}</span>
+                )}
+              </h2>
+              <button onClick={clearSearch} className="text-xs text-gray-400 hover:text-gray-600 px-2 py-1 rounded hover:bg-gray-100">
+                Clear ✕
+              </button>
+            </div>
+            <EmailTable emails={searchResults} loading={searchLoading} onActionToggle={loadSummary} />
+          </div>
+        )}
+
         {/* Tabs */}
         <div className="flex gap-0.5 mb-6 border-b border-gray-100 overflow-x-auto">
           {TABS.map((t) => (

@@ -29,6 +29,9 @@ export const saveContact = (data) =>
 export const deleteContact = (id) =>
   fetch(`/api/people/contacts/${id}`, { method: "DELETE", credentials: "include" }).then((r) => r.json());
 
+export const searchEmails = (q) => apiFetch(`/api/dashboard/search?q=${encodeURIComponent(q)}`);
+export const getReplysuggestions = (id) => apiFetch(`/api/dashboard/emails/${id}/reply-suggestions`);
+
 export const toggleAction = (id) =>
   fetch(`/api/dashboard/emails/${id}/action`, { method: "POST", credentials: "include" }).then((r) => r.json());
 export const replyToEmail = (id, text) =>

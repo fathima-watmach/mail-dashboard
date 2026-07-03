@@ -1,7 +1,10 @@
 import React, { useState } from "react";
 
-async function fetchThreadSummary(emailId) {
-  const res = await fetch(`/api/dashboard/emails/${emailId}/thread-summary`, { credentials: "include" });
+async function fetchThreadSummary(emailId, refresh = false) {
+  const url = `/api/dashboard/emails/${emailId}/thread-summary${refresh ? "?refresh=true" : ""}`;
+  const res = await fetch(url, { credentials: "include" });
+  const contentType = res.headers.get("content-type") || "";
+  if (!contentType.includes("application/json")) throw new Error("server-starting");
   return res.json();
 }
 
@@ -10,27 +13,11 @@ export default function ThreadSummary({ emailId }) {
   const [entries, setEntries] = useState([]);
   const [errMsg, setErrMsg] = useState("");
 
-  const load = async (e) => {
-    e.stopPropagation();
+  const load = async (e, refresh = false) => {
+    if (e) e.stopPropagation();
     setState("loading");
     try {
-      const res = await fetch(`/api/dashboard/emails/${emailId}/thread-summary`, { credentials: "include" });
-
-      // Render's free tier serves an HTML wakeup page on cold start —
-      // catch that before trying to parse as JSON
-      const contentType = res.headers.get("content-type") || "";
-      if (!contentType.includes("application/json")) {
-        setErrMsg("Server is starting up — please try again in 30 seconds");
-        setState("error");
-        return;
-      }
-
-      const data = await res.json();
-      if (!res.ok) {
-        setErrMsg(data.error || `Error ${res.status}`);
-        setState("error");
-        return;
-      }
+      const data = await fetchThreadSummary(emailId, refresh);
       if (data.entries && data.entries.length > 0) {
         setEntries(data.entries);
         setState("done");
@@ -38,7 +25,11 @@ export default function ThreadSummary({ emailId }) {
         setState("single");
       }
     } catch (err) {
-      setErrMsg("Server is starting up — please try again in 30 seconds");
+      if (err.message === "server-starting") {
+        setErrMsg("Server is starting up — please try again in 30 seconds");
+      } else {
+        setErrMsg(err.message || "Unknown error");
+      }
       setState("error");
     }
   };
@@ -74,7 +65,16 @@ export default function ThreadSummary({ emailId }) {
 
   return (
     <div className="mt-2 space-y-1.5">
-      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Thread timeline</p>
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Thread timeline</p>
+        <button
+          onClick={e => load(e, true)}
+          className="text-[10px] text-gray-300 hover:text-gray-500 transition-colors"
+          title="Regenerate summary"
+        >
+          ↺ Refresh
+        </button>
+      </div>
       <ol className="relative border-l border-gray-200 ml-2 space-y-2">
         {entries.map((entry, i) => (
           <li key={i} className="ml-4">

@@ -99,9 +99,9 @@ function CcInput({ value, onChange }) {
 }
 
 // ── Main ReplyCompose ─────────────────────────────────────────────────────────
-export default function ReplyCompose({ email, onSent, onCancel }) {
+export default function ReplyCompose({ email, onSent, onCancel, initialText = "" }) {
   const [mode, setMode] = useState("reply");      // reply | replyAll
-  const [text, setText] = useState("");
+  const [text, setText] = useState(initialText);
   const [cc, setCc] = useState([]);
   const [status, setStatus] = useState("idle");   // idle | sending | sent | error
 
