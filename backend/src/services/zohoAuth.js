@@ -61,21 +61,26 @@ async function getMe(accessToken) {
   return { email: data.Email?.toLowerCase(), displayName: data.Display_Name || data.Email };
 }
 
+const TOKEN_ENCRYPTION_KEY = process.env.TOKEN_ENCRYPTION_KEY;
+
 async function saveTokens(personId, tokenResponse) {
   const expiresAt = new Date(Date.now() + (tokenResponse.expires_in || 3600) * 1000);
   await pool.query(
     `INSERT INTO oauth_tokens (person_id, provider, access_token, refresh_token, expires_at, updated_at)
-     VALUES ($1, 'zoho', $2, $3, $4, now())
+     VALUES ($1, 'zoho', pgp_sym_encrypt($2, $5), pgp_sym_encrypt($3, $5), $4, now())
      ON CONFLICT (person_id, provider)
-     DO UPDATE SET access_token = $2, refresh_token = $3, expires_at = $4, updated_at = now()`,
-    [personId, tokenResponse.access_token, tokenResponse.refresh_token, expiresAt]
+     DO UPDATE SET access_token = pgp_sym_encrypt($2, $5), refresh_token = pgp_sym_encrypt($3, $5), expires_at = $4, updated_at = now()`,
+    [personId, tokenResponse.access_token, tokenResponse.refresh_token, expiresAt, TOKEN_ENCRYPTION_KEY]
   );
 }
 
 async function getValidAccessToken(personId) {
   const { rows } = await pool.query(
-    `SELECT access_token, refresh_token, expires_at FROM oauth_tokens WHERE person_id = $1 AND provider = 'zoho'`,
-    [personId]
+    `SELECT pgp_sym_decrypt(access_token, $2) AS access_token,
+            pgp_sym_decrypt(refresh_token, $2) AS refresh_token,
+            expires_at
+     FROM oauth_tokens WHERE person_id = $1 AND provider = 'zoho'`,
+    [personId, TOKEN_ENCRYPTION_KEY]
   );
   if (rows.length === 0) throw new Error(`No Zoho tokens for person_id ${personId}`);
 

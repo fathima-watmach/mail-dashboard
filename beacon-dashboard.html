@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Beacon — Inbox Signal</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0B1220;
+    --surface:#111A2C;
+    --surface-2:#16223A;
+    --line:#22304A;
+    --text:#E7EAF2;
+    --muted:#8993A8;
+    --beam:#F5A623;
+    --beam-dim:#8A6421;
+    --urgent:#FF6B5D;
+    --reply:#5DA9E9;
+    --fyi:#4ECDC4;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{
+    background:var(--bg);
+    color:var(--text);
+    font-family:'Inter',sans-serif;
+    min-height:100vh;
+    -webkit-font-smoothing:antialiased;
+  }
+  ::selection{background:var(--beam); color:#0B1220;}
+
+  /* ---------- Top bar ---------- */
+  .topbar{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:18px 32px;
+    border-bottom:1px solid var(--line);
+  }
+  .brand{ display:flex; align-items:center; gap:10px; }
+  .brand-mark{ width:22px; height:22px; position:relative; }
+  .brand-mark::before{
+    content:''; position:absolute; inset:0;
+    border-radius:50%;
+    background:conic-gradient(var(--beam) 0deg, transparent 70deg, transparent 360deg);
+    animation:spin 4s linear infinite;
+  }
+  .brand-mark::after{
+    content:''; position:absolute; inset:6px;
+    border-radius:50%; background:var(--bg);
+  }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+  .brand-name{ font-family:'Fraunces',serif; font-size:19px; letter-spacing:0.01em; }
+  .brand-name em{ font-style:normal; color:var(--beam); }
+  .topbar-right{ display:flex; align-items:center; gap:20px; font-size:13px; color:var(--muted); }
+  .avatar{
+    width:30px; height:30px; border-radius:50%;
+    background:var(--surface-2); border:1px solid var(--line);
+    display:flex; align-items:center; justify-content:center;
+    font-size:12px; font-family:'IBM Plex Mono',monospace; color:var(--text);
+  }
+
+  /* ---------- Signal hero (signature element) ---------- */
+  .signal{
+    position:relative;
+    margin:28px 32px 8px;
+    padding:34px 36px;
+    border-radius:14px;
+    background:radial-gradient(120% 160% at 15% 0%, #17233B 0%, #0E1526 70%);
+    border:1px solid var(--line);
+    overflow:hidden;
+    display:flex; align-items:center; justify-content:space-between; gap:40px;
+  }
+  .sweep-field{
+    position:relative;
+    width:180px; height:180px;
+    flex:0 0 auto;
+  }
+  .sweep-field::before{
+    content:'';
+    position:absolute; inset:0; border-radius:50%;
+    border:1px solid var(--line);
+  }
+  .sweep-field::after{
+    content:'';
+    position:absolute; inset:28px; border-radius:50%;
+    border:1px solid var(--line);
+  }
+  .sweep-beam{
+    position:absolute; inset:0; border-radius:50%;
+    background:conic-gradient(from 0deg, transparent 0deg, rgba(245,166,35,0.35) 28deg, transparent 60deg, transparent 360deg);
+    animation:spin 5.5s linear infinite;
+  }
+  .sweep-core{
+    position:absolute; left:50%; top:50%; width:8px; height:8px;
+    background:var(--beam); border-radius:50%;
+    transform:translate(-50%,-50%);
+    box-shadow:0 0 14px 3px rgba(245,166,35,0.6);
+  }
+  .blip{
+    position:absolute; width:6px; height:6px; border-radius:50%;
+    background:var(--muted);
+  }
+  .signal-copy{ flex:1; }
+  .signal-eyebrow{
+    font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:0.14em;
+    color:var(--beam); text-transform:uppercase; margin-bottom:10px;
+  }
+  .signal-headline{
+    font-family:'Fraunces',serif; font-weight:500; font-size:28px; line-height:1.25;
+    max-width:520px;
+  }
+  .signal-sub{ margin-top:12px; color:var(--muted); font-size:14px; max-width:480px; }
+  .signal-stats{ display:flex; gap:32px; margin-top:22px; }
+  .signal-stat-num{ font-family:'IBM Plex Mono',monospace; font-size:24px; color:var(--text); }
+  .signal-stat-label{ font-size:12px; color:var(--muted); margin-top:2px; }
+
+  /* ---------- Layout ---------- */
+  .layout{
+    display:grid; grid-template-columns:1fr 300px;
+    gap:20px; padding:8px 32px 40px; align-items:start;
+  }
+
+  .lanes{ display:grid; grid-template-columns:repeat(3,1fr); gap:16px; }
+  .lane-head{ display:flex; align-items:center; gap:8px; margin-bottom:12px; }
+  .lane-dot{ width:8px; height:8px; border-radius:50%; }
+  .lane-title{ font-size:13px; font-weight:600; text-transform:uppercase; letter-spacing:0.06em; }
+  .lane-count{ margin-left:auto; font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--muted); }
+
+  .card{
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-radius:10px;
+    padding:14px 15px;
+    margin-bottom:10px;
+    transition:border-color .15s ease, transform .15s ease;
+  }
+  .card:hover{ border-color:#33456B; transform:translateY(-1px); }
+  .card-top{ display:flex; justify-content:space-between; align-items:baseline; gap:8px; }
+  .card-sender{ font-size:13px; font-weight:600; }
+  .card-time{ font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--muted); white-space:nowrap; }
+  .card-subject{ font-size:13.5px; margin-top:4px; color:var(--text); }
+  .card-reason{
+    margin-top:9px; padding-top:9px; border-top:1px dashed var(--line);
+    font-size:12px; color:var(--muted); display:flex; gap:7px; align-items:flex-start;
+  }
+  .card-reason svg{ flex:0 0 auto; margin-top:2px; }
+  .confidence{
+    margin-top:8px; display:flex; align-items:center; gap:6px;
+    font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:var(--muted);
+  }
+  .confidence-bar{ flex:1; height:3px; background:var(--surface-2); border-radius:2px; overflow:hidden; }
+  .confidence-fill{ height:100%; background:var(--beam); }
+
+  .urgent-dot{ background:var(--urgent); }
+  .reply-dot{ background:var(--reply); }
+  .fyi-dot{ background:var(--fyi); }
+
+  /* ---------- Sidebar ---------- */
+  .side-card{
+    background:var(--surface); border:1px solid var(--line); border-radius:10px;
+    padding:18px; margin-bottom:16px;
+  }
+  .side-title{ font-size:12px; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin-bottom:14px; }
+  .time-saved{ font-family:'Fraunces',serif; font-size:36px; color:var(--beam); }
+  .time-saved-sub{ font-size:12.5px; color:var(--muted); margin-top:4px; }
+
+  .breakdown-row{ display:flex; align-items:center; gap:10px; margin-bottom:11px; font-size:12.5px; }
+  .breakdown-label{ width:78px; color:var(--muted); }
+  .breakdown-track{ flex:1; height:6px; background:var(--surface-2); border-radius:3px; overflow:hidden; }
+  .breakdown-fill{ height:100%; border-radius:3px; }
+  .breakdown-val{ width:28px; text-align:right; font-family:'IBM Plex Mono',monospace; color:var(--text); }
+
+  .filed-item{ display:flex; justify-content:space-between; font-size:12px; padding:8px 0; border-bottom:1px solid var(--line); }
+  .filed-item:last-child{ border-bottom:none; }
+  .filed-name{ color:var(--text); }
+  .filed-tag{ font-family:'IBM Plex Mono',monospace; color:var(--muted); font-size:10.5px; }
+
+  @media (max-width:980px){
+    .layout{ grid-template-columns:1fr; }
+    .lanes{ grid-template-columns:1fr; }
+    .signal{ flex-direction:column; align-items:flex-start; }
+  }
+
+  /* ---------- Tabs ---------- */
+  .tabs{
+    display:flex; gap:6px; padding:16px 32px 0;
+  }
+  .tab{
+    font-family:'IBM Plex Mono',monospace; font-size:12px; letter-spacing:0.04em;
+    color:var(--muted); background:transparent; border:1px solid transparent;
+    padding:8px 14px; border-radius:7px; cursor:pointer;
+  }
+  .tab.active{ color:var(--text); background:var(--surface); border-color:var(--line); }
+  .view{ display:none; }
+  .view.active{ display:block; }
+
+  /* ---------- Analytics ---------- */
+  .kpi-row{ display:grid; grid-template-columns:repeat(4,1fr); gap:16px; padding:20px 32px 0; }
+  .kpi-card{ background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:16px 18px; }
+  .kpi-label{ font-size:11.5px; color:var(--muted); text-transform:uppercase; letter-spacing:0.05em; }
+  .kpi-value{ font-family:'Fraunces',serif; font-size:26px; margin-top:6px; }
+  .kpi-delta{ font-family:'IBM Plex Mono',monospace; font-size:11px; margin-top:4px; }
+  .kpi-delta.up{ color:var(--fyi); }
+  .kpi-delta.down{ color:var(--urgent); }
+
+  .chart-grid{ display:grid; grid-template-columns:1.4fr 1fr; gap:16px; padding:16px 32px 0; align-items:start; }
+  .chart-card{ background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:18px 20px; }
+  .chart-title{ font-size:12px; text-transform:uppercase; letter-spacing:0.05em; color:var(--muted); margin-bottom:4px; }
+  .chart-sub{ font-size:11.5px; color:var(--muted); margin-bottom:14px; }
+  .legend{ display:flex; gap:14px; margin-top:10px; font-size:11px; color:var(--muted); }
+  .legend span{ display:inline-flex; align-items:center; gap:5px; }
+  .legend i{ width:8px; height:8px; border-radius:2px; display:inline-block; }
+
+  .heatmap{ display:grid; grid-template-columns:34px repeat(24,1fr); gap:3px; align-items:center; }
+  .heatmap .rowlabel{ font-family:'IBM Plex Mono',monospace; font-size:10px; color:var(--muted); }
+  .heatmap .cell{ aspect-ratio:1; border-radius:2px; background:var(--surface-2); }
+  .hourlabels{ display:grid; grid-template-columns:34px repeat(24,1fr); gap:3px; margin-top:6px; }
+  .hourlabels span{ font-family:'IBM Plex Mono',monospace; font-size:8.5px; color:var(--muted); text-align:center; }
+
+  .sender-table{ width:100%; border-collapse:collapse; font-size:12.5px; }
+  .sender-table th{ text-align:left; font-size:10.5px; text-transform:uppercase; letter-spacing:0.05em; color:var(--muted); padding-bottom:10px; font-weight:500; }
+  .sender-table td{ padding:9px 0; border-top:1px solid var(--line); }
+  .sender-table .tag{ font-family:'IBM Plex Mono',monospace; font-size:10px; padding:2px 7px; border-radius:20px; }
+  .tag-urgent{ background:rgba(255,107,93,0.15); color:var(--urgent); }
+  .tag-reply{ background:rgba(93,169,233,0.15); color:var(--reply); }
+  .tag-fyi{ background:rgba(78,205,196,0.15); color:var(--fyi); }
+  .sender-count{ font-family:'IBM Plex Mono',monospace; color:var(--text); text-align:right; }
+
+  @media (max-width:980px){
+    .kpi-row{ grid-template-columns:repeat(2,1fr); }
+    .chart-grid{ grid-template-columns:1fr; }
+  }
+</style>
+</head>
+<body>
+
+  <div class="topbar">
+    <div class="brand">
+      <div class="brand-mark"></div>
+      <div class="brand-name">beacon<em>.</em></div>
+    </div>
+    <div class="topbar-right">
+      <span>ware@poshop.systems</span>
+      <div class="avatar">W</div>
+    </div>
+  </div>
+
+  <div class="signal">
+    <div class="sweep-field" id="sweepField">
+      <div class="sweep-beam"></div>
+      <div class="sweep-core"></div>
+    </div>
+    <div class="signal-copy">
+      <div class="signal-eyebrow">Scanning inbox — live</div>
+      <div class="signal-headline">Every email gets read once, so you don't have to read it twice.</div>
+      <div class="signal-sub">Beacon sorts what lands in your inbox into three lanes the moment it arrives, and tells you why.</div>
+      <div class="signal-stats">
+        <div>
+          <div class="signal-stat-num">342</div>
+          <div class="signal-stat-label">Scanned today</div>
+        </div>
+        <div>
+          <div class="signal-stat-num">18</div>
+          <div class="signal-stat-label">Need you</div>
+        </div>
+        <div>
+          <div class="signal-stat-num">94%</div>
+          <div class="signal-stat-label">Filed correctly</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" data-tab="triage">Triage</button>
+    <button class="tab" data-tab="analytics">Analytics</button>
+  </div>
+
+  <div class="view active" id="view-triage">
+  <div class="layout">
+    <div class="lanes">
+
+      <!-- Urgent -->
+      <div class="lane">
+        <div class="lane-head">
+          <span class="lane-dot urgent-dot"></span>
+          <span class="lane-title">Urgent</span>
+          <span class="lane-count">4</span>
+        </div>
+
+        <div class="card">
+          <div class="card-top"><span class="card-sender">HDFC Bank — Corporate</span><span class="card-time">9:14 AM</span></div>
+          <div class="card-subject">Forex remittance hold on outbound transfer</div>
+          <div class="card-reason"><span>⚑</span> Mentions a blocked transaction and a same-day deadline.</div>
+          <div class="confidence"><span>96%</span><div class="confidence-bar"><div class="confidence-fill" style="width:96%"></div></div></div>
+        </div>
+
+        <div class="card">
+          <div class="card-top"><span class="card-sender">Aslam</span><span class="card-time">8:52 AM</span></div>
+          <div class="card-subject">Need sign-off before vendor call at 11</div>
+          <div class="card-reason"><span>⚑</span> Direct ask from a co-director, time-boxed to today.</div>
+          <div class="confidence"><span>91%</span><div class="confidence-bar"><div class="confidence-fill" style="width:91%"></div></div></div>
+        </div>
+
+        <div class="card">
+          <div class="card-top"><span class="card-sender">Evervolt Green Energy — HR</span><span class="card-time">Yesterday</span></div>
+          <div class="card-subject">Re: offer verification, awaiting your reply</div>
+          <div class="card-reason"><span>⚑</span> Second follow-up on an unanswered thread.</div>
+          <div class="confidence"><span>88%</span><div class="confidence-bar"><div class="confidence-fill" style="width:88%"></div></div></div>
+        </div>
+
+        <div class="card">
+          <div class="card-top"><span class="card-sender">Jio Business</span><span class="card-time">Yesterday</span></div>
+          <div class="card-subject">Address change request rejected — action needed</div>
+          <div class="card-reason"><span>⚑</span> Rejection notice, blocks the relocation task.</div>
+          <div class="confidence"><span>85%</span><div class="confidence-bar"><div class="confidence-fill" style="width:85%"></div></div></div>
+        </div>
+      </div>
+
+      <!-- Needs reply -->
+      <div class="lane">
+        <div class="lane-head">
+          <span class="lane-dot reply-dot"></span>
+          <span class="lane-title">Needs reply</span>
+          <span class="lane-count">7</span>
+        </div>
+
+        <div class="card">
+          <div class="card-top"><span class="card-sender">Nazla</span><span class="card-time">10:02 AM</span></div>
+          <div class="card-subject">Offer letter draft — one clause to confirm</div>
+          <div class="card-reason"><span>✎</span> Open question, no deadline stated.</div>
+          <div class="confidence"><span>82%</span><div class="confidence-bar"><div class="confidence-fill" style="width:82%"></div></div></div>
+        </div>
+
+        <div class="card">
+          <div class="card-top"><span class="card-sender">42Gears — Sales</span><span class="card-time">9:40 AM</span></div>
+          <div class="card-subject">Following up on MDM pricing questions</div>
+          <div class="card-reason"><span>✎</span> Vendor awaiting a decision, low urgency.</div>
+          <div class="confidence"><span>77%</span><div class="confidence-bar"><div class="confidence-fill" style="width:77%"></div></div></div>
+        </div>
+
+        <div class="card">
+          <div class="card-top"><span class="card-sender">WeWork Bengaluru</span><span class="card-time">Yesterday</span></div>
+          <div class="card-subject">Virtual office renewal — confirm seat count</div>
+          <div class="card-reason"><span>✎</span> Simple confirmation, no other blockers.</div>
+          <div class="confidence"><span>80%</span><div class="confidence-bar"><div class="confidence-fill" style="width:80%"></div></div></div>
+        </div>
+
+        <div class="card">
+          <div class="card-top"><span class="card-sender">POSBANK HQ</span><span class="card-time">2 days ago</span></div>
+          <div class="card-subject">India distribution — Q3 stock allocation</div>
+          <div class="card-reason"><span>✎</span> Needs a number back, not time-sensitive.</div>
+          <div class="confidence"><span>74%</span><div class="confidence-bar"><div class="confidence-fill" style="width:74%"></div></div></div>
+        </div>
+      </div>
+
+      <!-- FYI -->
+      <div class="lane">
+        <div class="lane-head">
+          <span class="lane-dot fyi-dot"></span>
+          <span class="lane-title">FYI</span>
+          <span class="lane-count">23</span>
+        </div>
+
+        <div class="card">
+          <div class="card-top"><span class="card-sender">IDFC First Bank</span><span class="card-time">9:00 AM</span></div>
+          <div class="card-subject">Your monthly account statement is ready</div>
+          <div class="card-reason"><span>ⓘ</span> Routine statement, no action required.</div>
+          <div class="confidence"><span>98%</span><div class="confidence-bar"><div class="confidence-fill" style="width:98%"></div></div></div>
+        </div>
+
+        <div class="card">
+          <div class="card-top"><span class="card-sender">GitHub</span><span class="card-time">8:15 AM</span></div>
+          <div class="card-subject">Weekly digest for your repositories</div>
+          <div class="card-reason"><span>ⓘ</span> Automated digest, matches past pattern.</div>
+          <div class="confidence"><span>97%</span><div class="confidence-bar"><div class="confidence-fill" style="width:97%"></div></div></div>
+        </div>
+
+        <div class="card">
+          <div class="card-top"><span class="card-sender">Our India Foundation</span><span class="card-time">Yesterday</span></div>
+          <div class="card-subject">Thank you — outreach materials received</div>
+          <div class="card-reason"><span>ⓘ</span> Closes a completed thread.</div>
+          <div class="confidence"><span>93%</span><div class="confidence-bar"><div class="confidence-fill" style="width:93%"></div></div></div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Sidebar -->
+    <div class="sidebar">
+      <div class="side-card">
+        <div class="side-title">Time saved this week</div>
+        <div class="time-saved">4.2 hrs</div>
+        <div class="time-saved-sub">vs. reading every email in arrival order</div>
+      </div>
+
+      <div class="side-card">
+        <div class="side-title">Category breakdown</div>
+        <div class="breakdown-row">
+          <span class="breakdown-label">Urgent</span>
+          <div class="breakdown-track"><div class="breakdown-fill" style="width:12%; background:var(--urgent)"></div></div>
+          <span class="breakdown-val">12%</span>
+        </div>
+        <div class="breakdown-row">
+          <span class="breakdown-label">Reply</span>
+          <div class="breakdown-track"><div class="breakdown-fill" style="width:21%; background:var(--reply)"></div></div>
+          <span class="breakdown-val">21%</span>
+        </div>
+        <div class="breakdown-row">
+          <span class="breakdown-label">FYI</span>
+          <div class="breakdown-track"><div class="breakdown-fill" style="width:67%; background:var(--fyi)"></div></div>
+          <span class="breakdown-val">67%</span>
+        </div>
+      </div>
+
+      <div class="side-card">
+        <div class="side-title">Recently auto-filed</div>
+        <div class="filed-item"><span class="filed-name">LinkedIn notifications</span><span class="filed-tag">FYI</span></div>
+        <div class="filed-item"><span class="filed-name">Amazon order updates</span><span class="filed-tag">FYI</span></div>
+        <div class="filed-item"><span class="filed-name">Zoom meeting recordings</span><span class="filed-tag">FYI</span></div>
+        <div class="filed-item"><span class="filed-name">Airtel bill reminder</span><span class="filed-tag">FYI</span></div>
+      </div>
+    </div>
+  </div>
+  </div>
+
+  <div class="view" id="view-analytics">
+
+    <div class="kpi-row">
+      <div class="kpi-card">
+        <div class="kpi-label">Emails processed</div>
+        <div class="kpi-value">2,140</div>
+        <div class="kpi-delta up">↑ 8.4% vs last 30d</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Avg. first response</div>
+        <div class="kpi-value">3.1 hrs</div>
+        <div class="kpi-delta up">↓ 41 min faster</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">AI filing accuracy</div>
+        <div class="kpi-value">94.2%</div>
+        <div class="kpi-delta up">↑ 1.6 pts</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Open backlog</div>
+        <div class="kpi-value">6</div>
+        <div class="kpi-delta down">↑ 2 vs last week</div>
+      </div>
+    </div>
+
+    <div class="chart-grid">
+      <div class="chart-card">
+        <div class="chart-title">Volume by category</div>
+        <div class="chart-sub">Last 14 days, emails received per day</div>
+        <svg id="volChart" viewBox="0 0 560 200" width="100%" height="200"></svg>
+        <div class="legend">
+          <span><i style="background:var(--urgent)"></i>Urgent</span>
+          <span><i style="background:var(--reply)"></i>Needs reply</span>
+          <span><i style="background:var(--fyi)"></i>FYI</span>
+        </div>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-title">Top senders</div>
+        <div class="chart-sub">By volume, last 30 days</div>
+        <table class="sender-table">
+          <thead><tr><th>Sender</th><th>Mostly</th><th style="text-align:right">Count</th></tr></thead>
+          <tbody>
+            <tr><td>HDFC Bank</td><td><span class="tag tag-urgent">Urgent</span></td><td class="sender-count">31</td></tr>
+            <tr><td>POSBANK HQ</td><td><span class="tag tag-reply">Reply</span></td><td class="sender-count">27</td></tr>
+            <tr><td>LinkedIn</td><td><span class="tag tag-fyi">FYI</span></td><td class="sender-count">64</td></tr>
+            <tr><td>Aslam</td><td><span class="tag tag-urgent">Urgent</span></td><td class="sender-count">19</td></tr>
+            <tr><td>Amazon</td><td><span class="tag tag-fyi">FYI</span></td><td class="sender-count">52</td></tr>
+            <tr><td>Nazla</td><td><span class="tag tag-reply">Reply</span></td><td class="sender-count">22</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="chart-grid">
+      <div class="chart-card">
+        <div class="chart-title">Response time trend</div>
+        <div class="chart-sub">Avg. hours to first reply, weekly</div>
+        <svg id="respChart" viewBox="0 0 560 160" width="100%" height="160"></svg>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-title">Activity by hour</div>
+        <div class="chart-sub">When email actually lands, Mon–Sun</div>
+        <div class="heatmap" id="heatmap"></div>
+        <div class="hourlabels">
+          <span></span><span>12a</span><span></span><span></span><span></span><span>4a</span><span></span><span></span>
+          <span></span><span>8a</span><span></span><span></span><span></span><span>12p</span><span></span><span></span>
+          <span></span><span>4p</span><span></span><span></span><span></span><span>8p</span><span></span><span></span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+<script>
+  // ---- tabs ----
+  document.querySelectorAll('.tab').forEach(t=>{
+    t.addEventListener('click', ()=>{
+      document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+      document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));
+      t.classList.add('active');
+      document.getElementById('view-'+t.dataset.tab).classList.add('active');
+    });
+  });
+
+  // ---- stacked volume chart ----
+  (function(){
+    const days = ['15','16','17','18','19','20','21','22','23','24','25','26','27','28'];
+    const urgent = [2,1,3,2,4,1,2,3,2,1,4,2,3,4];
+    const reply  = [5,4,6,5,7,4,5,6,5,4,7,5,6,7];
+    const fyi    = [14,12,16,15,18,13,14,17,15,12,19,15,16,18];
+    const w=560,h=200,pad=24,barw=(w-pad*2)/days.length*0.6,gap=(w-pad*2)/days.length;
+    const max = Math.max(...urgent.map((u,i)=>u+reply[i]+fyi[i]));
+    const svg = document.getElementById('volChart');
+    let s='';
+    days.forEach((d,i)=>{
+      const x = pad + i*gap + (gap-barw)/2;
+      const uH = urgent[i]/max*(h-pad*2), rH = reply[i]/max*(h-pad*2), fH = fyi[i]/max*(h-pad*2);
+      let y = h-pad;
+      y -= fH; s += `<rect x="${x}" y="${y}" width="${barw}" height="${fH}" fill="#4ECDC4" opacity="0.85" rx="1.5"/>`;
+      y -= rH; s += `<rect x="${x}" y="${y}" width="${barw}" height="${rH}" fill="#5DA9E9" opacity="0.9" rx="1.5"/>`;
+      y -= uH; s += `<rect x="${x}" y="${y}" width="${barw}" height="${uH}" fill="#FF6B5D" rx="1.5"/>`;
+      if(i%2===0) s += `<text x="${x+barw/2}" y="${h-6}" font-size="8" fill="#8993A8" text-anchor="middle" font-family="IBM Plex Mono">${d}</text>`;
+    });
+    svg.innerHTML = s;
+  })();
+
+  // ---- response time line chart ----
+  (function(){
+    const vals = [4.6,4.1,3.9,3.7,3.4,3.2,3.1];
+    const labels=['W1','W2','W3','W4','W5','W6','W7'];
+    const w=560,h=160,pad=26;
+    const max=Math.max(...vals), min=Math.min(...vals);
+    const pts = vals.map((v,i)=>{
+      const x = pad + i*(w-pad*2)/(vals.length-1);
+      const y = h-pad - (v-min)/(max-min||1)*(h-pad*2);
+      return [x,y];
+    });
+    const path = pts.map((p,i)=> (i===0?'M':'L')+p[0].toFixed(1)+','+p[1].toFixed(1)).join(' ');
+    const area = path + ` L${pts[pts.length-1][0]},${h-pad} L${pts[0][0]},${h-pad} Z`;
+    let s = `<path d="${area}" fill="url(#grad)" opacity="0.25"/>`;
+    s += `<defs><linearGradient id="grad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#F5A623"/><stop offset="100%" stop-color="#F5A623" stop-opacity="0"/></linearGradient></defs>`;
+    s += `<path d="${path}" fill="none" stroke="#F5A623" stroke-width="2"/>`;
+    pts.forEach((p,i)=>{
+      s += `<circle cx="${p[0]}" cy="${p[1]}" r="3" fill="#0B1220" stroke="#F5A623" stroke-width="2"/>`;
+      s += `<text x="${p[0]}" y="${h-6}" font-size="8" fill="#8993A8" text-anchor="middle" font-family="IBM Plex Mono">${labels[i]}</text>`;
+    });
+    document.getElementById('respChart').innerHTML = s;
+  })();
+
+  // ---- heatmap ----
+  (function(){
+    const days = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+    const el = document.getElementById('heatmap');
+    let html='';
+    days.forEach(d=>{
+      html += `<span class="rowlabel">${d}</span>`;
+      for(let hr=0; hr<24; hr++){
+        // busier 8am-8pm on weekdays, quiet nights/weekends
+        const weekday = !['Sat','Sun'].includes(d);
+        let v = 0.05;
+        if(hr>=8 && hr<=20) v = weekday ? 0.3+Math.random()*0.7 : 0.15+Math.random()*0.25;
+        html += `<div class="cell" style="background:rgba(245,166,35,${v.toFixed(2)})"></div>`;
+      }
+    });
+    el.innerHTML = html;
+  })();
+</script>
+  // scatter a few static "blip" points around the sweep ring, at fixed angles
+  const field = document.getElementById('sweepField');
+  const angles = [20, 95, 160, 210, 260, 310];
+  angles.forEach(a=>{
+    const r = 78;
+    const rad = a * Math.PI/180;
+    const x = 90 + r*Math.cos(rad) - 3;
+    const y = 90 + r*Math.sin(rad) - 3;
+    const b = document.createElement('div');
+    b.className = 'blip';
+    b.style.left = x+'px';
+    b.style.top = y+'px';
+    field.appendChild(b);
+  });
+</script>
+
+</body>
+</html>

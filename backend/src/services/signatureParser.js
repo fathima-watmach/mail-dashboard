@@ -138,4 +138,59 @@ function extractSuggestion(email, senderRows, mentionRows) {
   return result;
 }
 
-module.exports = { extractSuggestion };
+/**
+ * Given a signature block, finds the short Title-Case line most likely to be a
+ * person's name (e.g. "Priya Nair"), using the same junk/address exclusions as
+ * extractRoleFromBlock. Looked at first since a name typically opens a signature
+ * block, just above the role line.
+ */
+function extractNameFromBlock(sigBlock) {
+  if (!sigBlock) return null;
+  const lines = sigBlock.split("\n").map((l) => l.trim()).filter(Boolean);
+
+  for (const line of lines.slice(0, 3)) {
+    if (!line || line.length < 3 || line.length > 60) continue;
+    if (JUNK_LINE_RE.test(line) || ADDRESS_LINE_RE.test(line)) continue;
+    if (/^[A-Z][a-zA-Z'-]+(\s+[A-Z][a-zA-Z'-]+){0,2}$/.test(line)) return line;
+  }
+  return null;
+}
+
+/**
+ * Best-effort {name, role} for whoever actually sent/handled ONE specific email —
+ * for shared inboxes (e.g. contactus@, info@) where several people send from the
+ * same address and there's no per-person login to identify who replied. Unlike
+ * extractSuggestion, this does not aggregate across multiple emails: it reads only
+ * the signature in this one message's body.
+ */
+function extractHandler(bodyText) {
+  if (!bodyText) return null;
+  for (const block of findAllSignatureBlocks(bodyText)) {
+    const name = extractNameFromBlock(block);
+    const role = extractRoleFromBlock(block, name);
+    if (name || role) return { name, role };
+  }
+  return null;
+}
+
+/**
+ * Matches an email body against a known, closed roster of names (e.g. the
+ * handful of coordinators who share one inbox), rather than guessing at
+ * signature formatting. Real signature samples show this is necessary — some
+ * staff don't use a "Regards"/"Thanks" closing line at all, so findAllSignatureBlocks
+ * would never even start looking for them. A direct roster match has no such
+ * dependency: it just checks whether a known name appears anywhere in the text.
+ * `roster` is an array of {name, role}. Returns the first match, or null.
+ */
+function matchRoster(bodyText, roster) {
+  if (!bodyText || !roster?.length) return null;
+  const lower = bodyText.toLowerCase();
+  for (const entry of roster) {
+    if (entry?.name && lower.includes(entry.name.toLowerCase())) {
+      return { name: entry.name, role: entry.role || null };
+    }
+  }
+  return null;
+}
+
+module.exports = { extractSuggestion, extractHandler, matchRoster };

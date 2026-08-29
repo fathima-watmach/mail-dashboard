@@ -104,6 +104,7 @@ export default function ReplyCompose({ email, onSent, onCancel, initialText = ""
   const [text, setText] = useState(initialText);
   const [cc, setCc] = useState([]);
   const [status, setStatus] = useState("idle");   // idle | sending | sent | error
+  const [errorMessage, setErrorMessage] = useState("");
 
   // Build the visible "To:" list for each mode
   const toRecipients = React.useMemo(() => {
@@ -140,6 +141,7 @@ export default function ReplyCompose({ email, onSent, onCancel, initialText = ""
       setStatus("sent");
       setTimeout(onSent, 1200);
     } else {
+      setErrorMessage(res.error || "");
       setStatus("error");
     }
   };
@@ -207,7 +209,7 @@ export default function ReplyCompose({ email, onSent, onCancel, initialText = ""
           />
           {status === "error" && (
             <p className="text-xs text-red-500">
-              Failed to send. Ensure Mail.Send permission is granted and try again.
+              {errorMessage || "Failed to send. Ensure Mail.Send permission is granted and try again."}
             </p>
           )}
           <div className="flex gap-2 justify-end">

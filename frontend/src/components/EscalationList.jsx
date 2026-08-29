@@ -90,6 +90,9 @@ function EscalationCard({ e }) {
       {expanded && !replying && (
         <div className="px-3 pb-2 text-xs text-gray-500 space-y-0.5 border-t border-orange-100">
           <p className="pt-2"><span className="font-medium text-gray-700 w-6 inline-block">From</span> {e.from_name ? `${e.from_name} <${e.from_email}>` : e.from_email}</p>
+          {(e.handled_by_name || e.handled_by_role) && (
+            <p><span className="font-medium text-gray-700 inline-block">Handled by</span> {[e.handled_by_name, e.handled_by_role].filter(Boolean).join(" — ")}</p>
+          )}
           {e.to_recipients && <p><span className="font-medium text-gray-700 w-6 inline-block">To</span> {e.to_recipients}</p>}
           {e.cc_recipients && e.cc_recipients !== "Not Provided" && <p><span className="font-medium text-gray-700 w-6 inline-block">Cc</span> {e.cc_recipients}</p>}
           {e.summary && <p className="pt-1 italic text-gray-600 border-t border-orange-100 mt-1">{e.summary}</p>}

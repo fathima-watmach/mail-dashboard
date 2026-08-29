@@ -17,3 +17,7 @@ npm-debug.log*
 # OS files
 .DS_Store
 Thumbs.db
+
+# Claude Code personal settings/hooks (not shared with the team)
+.claude/settings.local.json
+.claude/.agents-md-stop-pending

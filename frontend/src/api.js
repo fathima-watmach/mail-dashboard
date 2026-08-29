@@ -7,14 +7,26 @@ async function apiFetch(path) {
   return res.json();
 }
 
+// Builds a "?from=...&to=..." query string from an optional {from, to} range,
+// merged with any params already present on the base query string.
+function withRange(query, range) {
+  const params = new URLSearchParams(query);
+  if (range?.from) params.set("from", range.from);
+  if (range?.to) params.set("to", range.to);
+  const qs = params.toString();
+  return qs ? `?${qs}` : "";
+}
+
 export const getMe = () => apiFetch("/auth/me");
-export const getSummary = () => apiFetch("/api/dashboard/summary");
-export const getBuckets = () => apiFetch("/api/dashboard/buckets");
-export const getEscalations = (directOnly = false) =>
-  apiFetch(`/api/dashboard/escalations${directOnly ? "?direct=true" : ""}`);
-export const getActionNeeded = () => apiFetch("/api/dashboard/action-needed");
-export const getEmails = (department) =>
-  apiFetch(`/api/dashboard/emails${department ? `?department=${encodeURIComponent(department)}` : ""}`);
+export const getSummary = (range) => apiFetch(`/api/dashboard/summary${withRange("", range)}`);
+export const getBuckets = (range) => apiFetch(`/api/dashboard/buckets${withRange("", range)}`);
+export const getEscalations = (directOnly = false, range) =>
+  apiFetch(`/api/dashboard/escalations${withRange(directOnly ? "direct=true" : "", range)}`);
+export const getActionNeeded = (range) => apiFetch(`/api/dashboard/action-needed${withRange("", range)}`);
+export const getEmails = (department, range) =>
+  apiFetch(`/api/dashboard/emails${withRange(department ? `department=${encodeURIComponent(department)}` : "", range)}`);
+export const getTrends = (range) => apiFetch(`/api/dashboard/trends${withRange("", range)}`);
+export const getAnalytics = (range) => apiFetch(`/api/dashboard/analytics${withRange("", range)}`);
 export const getScores = () => apiFetch("/api/dashboard/scores");
 
 // People & domains

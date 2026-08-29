@@ -2,22 +2,43 @@ const express = require("express");
 const router = express.Router();
 const axios = require("axios");
 const pool = require("../db/pool");
-const { requireLogin } = require("../middleware/auth");
+const { requireLogin, attachVisibility } = require("../middleware/auth");
 const { getValidAccessToken: getMsToken }   = require("../services/msAuth");
 const { getValidAccessToken: getZohoToken } = require("../services/zohoAuth");
 const { sendReply: zohoReply }              = require("../services/zohoMail");
+const { graphBaseFor }                      = require("../services/graphMail");
+const { resolveMailboxAccess }              = require("../services/mailboxAccess");
 const { callLLM, extractJson }              = require("../services/llm");
 
-router.use(requireLogin);
+router.use(requireLogin, attachVisibility);
+
+// Appends an optional inclusive date-range filter (req.query.from/to, 'YYYY-MM-DD')
+// to a query's WHERE clause, pushing bound params onto the given array. Omitted
+// entirely when no range is given, so every route stays backward compatible.
+function dateRangeFilter(req, params, column = "e.received_at") {
+  let clause = "";
+  if (req.query.from) {
+    params.push(req.query.from);
+    clause += ` AND ${column} >= $${params.length}`;
+  }
+  if (req.query.to) {
+    params.push(req.query.to);
+    clause += ` AND ${column} < $${params.length}::date + interval '1 day'`;
+  }
+  return clause;
+}
 
 router.get("/summary", async (req, res) => {
-  const { personId } = req.session;
+  const ids = req.visibleMailboxIds;
+  const buildParams = () => [ids];
+  const range = (params) => dateRangeFilter(req, params, "received_at");
 
+  const p1 = buildParams(), p2 = buildParams(), p3 = buildParams(), p4 = buildParams();
   const [totalRes, criticalRes, actionRes, escalationRes] = await Promise.all([
-    pool.query(`SELECT COUNT(*) FROM emails WHERE mailbox_owner_id = $1`, [personId]),
-    pool.query(`SELECT COUNT(*) FROM emails WHERE mailbox_owner_id = $1 AND is_critical = true`, [personId]),
-    pool.query(`SELECT COUNT(*) FROM emails WHERE mailbox_owner_id = $1 AND urgency = 'action_needed' AND is_direct_to_owner = true`, [personId]),
-    pool.query(`SELECT COUNT(*) FROM emails WHERE mailbox_owner_id = $1 AND (classification_raw->>'isEscalation')::boolean = true`, [personId]),
+    pool.query(`SELECT COUNT(*) FROM emails WHERE mailbox_owner_id = ANY($1::int[]) ${range(p1)}`, p1),
+    pool.query(`SELECT COUNT(*) FROM emails WHERE mailbox_owner_id = ANY($1::int[]) AND is_critical = true ${range(p2)}`, p2),
+    pool.query(`SELECT COUNT(*) FROM emails WHERE mailbox_owner_id = ANY($1::int[]) AND urgency = 'action_needed' AND is_direct_to_owner = true ${range(p3)}`, p3),
+    pool.query(`SELECT COUNT(*) FROM emails WHERE mailbox_owner_id = ANY($1::int[]) AND (classification_raw->>'isEscalation')::boolean = true ${range(p4)}`, p4),
   ]);
 
   res.json({
@@ -29,87 +50,271 @@ router.get("/summary", async (req, res) => {
 });
 
 router.get("/buckets", async (req, res) => {
-  const { personId } = req.session;
-
+  const params = [req.visibleMailboxIds];
+  const range = dateRangeFilter(req, params);
   const { rows } = await pool.query(
     `SELECT d.name AS department, e.urgency, COUNT(*) AS count
      FROM emails e
      LEFT JOIN departments d ON d.id = e.department_id
-     WHERE e.mailbox_owner_id = $1
+     WHERE e.mailbox_owner_id = ANY($1::int[]) ${range}
      GROUP BY d.name, e.urgency
      ORDER BY d.name`,
-    [personId]
+    params
   );
 
   res.json({ buckets: rows });
 });
 
+router.get("/trends", async (req, res) => {
+  const params = [req.visibleMailboxIds];
+  const range = dateRangeFilter(req, params, "received_at");
+
+  const { rows } = await pool.query(
+    `SELECT to_char(date_trunc('day', received_at), 'YYYY-MM-DD') AS day,
+            COUNT(*) FILTER (WHERE urgency = 'action_needed') AS action_needed,
+            COUNT(*) FILTER (WHERE urgency = 'fyi') AS fyi,
+            COUNT(*) FILTER (WHERE (classification_raw->>'isEscalation')::boolean) AS escalations
+     FROM emails
+     WHERE mailbox_owner_id = ANY($1::int[]) ${range}
+     GROUP BY 1
+     ORDER BY 1`,
+    params
+  );
+
+  res.json({
+    days: rows.map((r) => ({
+      day: r.day,
+      actionNeeded: Number(r.action_needed),
+      fyi: Number(r.fyi),
+      escalations: Number(r.escalations),
+    })),
+  });
+});
+
+router.get("/analytics", async (req, res) => {
+ try {
+  const ids = req.visibleMailboxIds;
+  const to = req.query.to || new Date().toISOString().slice(0, 10);
+  const from = req.query.from || (() => {
+    const d = new Date(to + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() - 29);
+    return d.toISOString().slice(0, 10);
+  })();
+
+  // Previous period of equal length immediately before `from`, for the KPI deltas.
+  const fromDate = new Date(from + "T00:00:00Z");
+  const toDate = new Date(to + "T00:00:00Z");
+  const rangeDays = Math.max(1, Math.round((toDate - fromDate) / 86400000) + 1);
+  const prevTo = new Date(fromDate); prevTo.setUTCDate(prevTo.getUTCDate() - 1);
+  const prevFrom = new Date(prevTo); prevFrom.setUTCDate(prevFrom.getUTCDate() - rangeDays + 1);
+  const prevFromStr = prevFrom.toISOString().slice(0, 10);
+  const prevToStr = prevTo.toISOString().slice(0, 10);
+
+  const params = [ids, from, to, prevFromStr, prevToStr];
+  const currentPeriodParams = params.slice(0, 3); // queries that only need ids/from/to, not the previous-period pair
+  const CATEGORY_CASE = "CASE WHEN is_critical THEN 'urgent' WHEN urgency = 'action_needed' THEN 'reply' ELSE 'fyi' END";
+
+  const [kpiRes, respRes, volumeRes, sendersRes, trendRes, heatmapRes] = await Promise.all([
+    pool.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE received_at >= $2 AND received_at < $3::date + interval '1 day') AS current_total,
+         COUNT(*) FILTER (WHERE received_at >= $4 AND received_at < $5::date + interval '1 day') AS prev_total,
+         COUNT(*) FILTER (WHERE classified_at IS NOT NULL AND received_at >= $2 AND received_at < $3::date + interval '1 day') AS current_classified,
+         COUNT(*) FILTER (WHERE classified_at IS NOT NULL AND received_at >= $4 AND received_at < $5::date + interval '1 day') AS prev_classified,
+         COUNT(*) FILTER (WHERE urgency = 'action_needed' AND actioned_at IS NULL AND received_at >= $2 AND received_at < $3::date + interval '1 day') AS current_backlog,
+         COUNT(*) FILTER (WHERE urgency = 'action_needed' AND actioned_at IS NULL AND received_at >= $4 AND received_at < $5::date + interval '1 day') AS prev_backlog
+       FROM emails WHERE mailbox_owner_id = ANY($1::int[])`,
+      params
+    ),
+    pool.query(
+      `WITH base AS (
+         SELECT e.id, e.received_at,
+                LOWER(REGEXP_REPLACE(e.subject, '^\\s*(re|fw|fwd)\\s*:\\s*', '', 'gi')) AS base_subject,
+                CASE WHEN e.received_at >= $2 AND e.received_at < $3::date + interval '1 day' THEN 'current'
+                     WHEN e.received_at >= $4 AND e.received_at < $5::date + interval '1 day' THEN 'previous'
+                END AS period
+         FROM emails e
+         WHERE e.mailbox_owner_id = ANY($1::int[])
+           AND e.received_at >= $4 AND e.received_at < $3::date + interval '1 day'
+       ),
+       thread_gaps AS (
+         SELECT e1.period, EXTRACT(EPOCH FROM (MIN(e2.received_at) - e1.received_at)) / 3600 AS gap_hours
+         FROM base e1 JOIN base e2 ON
+           e2.base_subject = e1.base_subject AND e2.received_at > e1.received_at AND e2.received_at < e1.received_at + interval '14 days'
+         WHERE e1.period IS NOT NULL
+         GROUP BY e1.id, e1.period, e1.received_at
+       )
+       SELECT period, ROUND(AVG(gap_hours), 1) AS avg_hours FROM thread_gaps GROUP BY period`,
+      params
+    ),
+    pool.query(
+      `SELECT to_char(date_trunc('day', received_at), 'YYYY-MM-DD') AS day,
+              COUNT(*) FILTER (WHERE is_critical) AS urgent,
+              COUNT(*) FILTER (WHERE NOT is_critical AND urgency = 'action_needed') AS reply,
+              COUNT(*) FILTER (WHERE urgency = 'fyi') AS fyi
+       FROM emails
+       WHERE mailbox_owner_id = ANY($1::int[]) AND received_at >= $2 AND received_at < $3::date + interval '1 day'
+       GROUP BY 1 ORDER BY 1`,
+      currentPeriodParams
+    ),
+    pool.query(
+      `WITH bucketed AS (
+         SELECT from_email, from_name, ${CATEGORY_CASE} AS category
+         FROM emails
+         WHERE mailbox_owner_id = ANY($1::int[]) AND received_at >= $2 AND received_at < $3::date + interval '1 day'
+       ),
+       per_sender_cat AS (
+         SELECT from_email, from_name, category, COUNT(*) AS cnt FROM bucketed GROUP BY from_email, from_name, category
+       ),
+       totals AS (
+         SELECT from_email, MAX(from_name) AS from_name, SUM(cnt) AS total FROM per_sender_cat GROUP BY from_email
+       )
+       SELECT t.from_email, t.from_name, t.total,
+         (SELECT psc.category FROM per_sender_cat psc WHERE psc.from_email = t.from_email ORDER BY psc.cnt DESC LIMIT 1) AS dominant_category
+       FROM totals t
+       ORDER BY t.total DESC
+       LIMIT 8`,
+      currentPeriodParams
+    ),
+    pool.query(
+      `WITH base AS (
+         SELECT e.id, e.received_at,
+                LOWER(REGEXP_REPLACE(e.subject, '^\\s*(re|fw|fwd)\\s*:\\s*', '', 'gi')) AS base_subject
+         FROM emails e
+         WHERE e.mailbox_owner_id = ANY($1::int[]) AND e.received_at >= $2 AND e.received_at < $3::date + interval '1 day'
+       ),
+       thread_gaps AS (
+         SELECT e1.id, date_trunc('week', e1.received_at) AS week,
+                EXTRACT(EPOCH FROM (MIN(e2.received_at) - e1.received_at)) / 3600 AS gap_hours
+         FROM base e1 JOIN base e2 ON
+           e2.base_subject = e1.base_subject AND e2.received_at > e1.received_at AND e2.received_at < e1.received_at + interval '14 days'
+         GROUP BY e1.id, e1.received_at
+       )
+       SELECT to_char(week, 'YYYY-MM-DD') AS week, ROUND(AVG(gap_hours), 1) AS avg_hours
+       FROM thread_gaps GROUP BY week ORDER BY week`,
+      currentPeriodParams
+    ),
+    pool.query(
+      `SELECT EXTRACT(dow FROM received_at)::int AS dow, EXTRACT(hour FROM received_at)::int AS hour, COUNT(*) AS count
+       FROM emails
+       WHERE mailbox_owner_id = ANY($1::int[]) AND received_at >= $2 AND received_at < $3::date + interval '1 day'
+       GROUP BY 1, 2`,
+      currentPeriodParams
+    ),
+  ]);
+
+  const k = kpiRes.rows[0];
+  const respByPeriod = Object.fromEntries(respRes.rows.map((r) => [r.period, r.avg_hours ? Number(r.avg_hours) : null]));
+  const pct = (cur, prev) => (prev > 0 ? Math.round(((cur - prev) / prev) * 1000) / 10 : null);
+
+  res.json({
+    kpis: {
+      emailsProcessed: { value: Number(k.current_total), deltaPct: pct(Number(k.current_total), Number(k.prev_total)) },
+      avgFirstResponseHours: { value: respByPeriod.current, deltaPct: pct(respByPeriod.current, respByPeriod.previous) },
+      classificationCoverage: {
+        value: k.current_total > 0 ? Math.round((k.current_classified / k.current_total) * 1000) / 10 : null,
+        deltaPct: null,
+      },
+      openBacklog: { value: Number(k.current_backlog), deltaPct: pct(Number(k.current_backlog), Number(k.prev_backlog)) },
+    },
+    volumeByDay: volumeRes.rows.map((r) => ({ day: r.day, urgent: Number(r.urgent), reply: Number(r.reply), fyi: Number(r.fyi) })),
+    topSenders: sendersRes.rows.map((r) => ({
+      fromEmail: r.from_email, fromName: r.from_name, total: Number(r.total), dominantCategory: r.dominant_category,
+    })),
+    responseTrend: trendRes.rows.map((r) => ({ week: r.week, avgHours: r.avg_hours ? Number(r.avg_hours) : null })),
+    heatmap: heatmapRes.rows.map((r) => ({ dow: r.dow, hour: r.hour, count: Number(r.count) })),
+  });
+ } catch (err) {
+  console.error("[analytics] failed:", err.message);
+  res.status(500).json({ error: "Could not compute analytics" });
+ }
+});
+
 router.get("/escalations", async (req, res) => {
-  const { personId } = req.session;
   const directOnly = req.query.direct === "true";
+  const params = [req.visibleMailboxIds];
+  const range = dateRangeFilter(req, params);
 
   const { rows } = await pool.query(
     `SELECT e.id, e.subject, e.from_name, e.from_email, e.received_at,
             e.to_recipients, e.cc_recipients,
             e.is_direct_to_owner, e.is_critical, e.summary, e.actioned_at,
             d.name AS department, p.display_name AS attributed_to,
+            e.handled_by_name, e.handled_by_role,
             e.classification_raw
      FROM emails e
      LEFT JOIN departments d ON d.id = e.department_id
      LEFT JOIN people p ON p.id = e.attributed_person_id
-     WHERE e.mailbox_owner_id = $1
+     WHERE e.mailbox_owner_id = ANY($1::int[])
        AND (e.classification_raw->>'isEscalation')::boolean = true
        ${directOnly ? "AND e.is_direct_to_owner = true" : ""}
+       ${range}
      ORDER BY e.is_critical DESC, e.received_at DESC
      LIMIT 100`,
-    [personId]
+    params
   );
 
   res.json({ escalations: rows });
 });
 
 router.get("/action-needed", async (req, res) => {
-  const { personId } = req.session;
+  const params = [req.visibleMailboxIds];
+  const range = dateRangeFilter(req, params);
 
   const { rows } = await pool.query(
     `SELECT e.id, e.subject, e.from_name, e.from_email, e.received_at,
             e.to_recipients, e.cc_recipients,
             e.is_direct_to_owner, e.is_critical, e.summary, e.actioned_at,
-            d.name AS department, p.display_name AS attributed_to
+            d.name AS department, p.display_name AS attributed_to,
+            e.handled_by_name, e.handled_by_role
      FROM emails e
      LEFT JOIN departments d ON d.id = e.department_id
      LEFT JOIN people p ON p.id = e.attributed_person_id
-     WHERE e.mailbox_owner_id = $1
+     WHERE e.mailbox_owner_id = ANY($1::int[])
        AND e.urgency = 'action_needed'
        AND e.is_direct_to_owner = true
+       ${range}
      ORDER BY e.is_critical DESC, e.received_at DESC
      LIMIT 100`,
-    [personId]
+    params
   );
 
   res.json({ emails: rows });
 });
 
 router.post("/emails/:id/reply", async (req, res) => {
-  const { personId } = req.session;
   const { text, replyAll = false, cc = [] } = req.body;
 
   if (!text?.trim()) return res.status(400).json({ error: "Reply text is required" });
 
   const { rows } = await pool.query(
-    `SELECT graph_message_id, mail_provider, from_email FROM emails WHERE id = $1 AND mailbox_owner_id = $2`,
-    [req.params.id, personId]
+    `SELECT e.graph_message_id, e.mail_provider, e.from_email, e.mailbox_owner_id, p.is_shared_inbox
+     FROM emails e
+     JOIN people p ON p.id = e.mailbox_owner_id
+     WHERE e.id = $1 AND e.mailbox_owner_id = ANY($2::int[])`,
+    [req.params.id, req.visibleMailboxIds]
   );
   if (!rows.length) return res.status(404).json({ error: "Not found" });
 
-  const { graph_message_id, mail_provider, from_email } = rows[0];
+  const { graph_message_id, mail_provider, mailbox_owner_id, is_shared_inbox } = rows[0];
 
+  // Shared/delegated inboxes (e.g. contactus@, maintenance@) are granted READ-ONLY
+  // access by agreement with the client — no send/modify/delete/move. Don't even
+  // attempt to send; the Graph call would likely fail anyway once Send-As hasn't
+  // been granted, but fail explicitly here instead of surfacing a confusing
+  // provider error.
+  if (is_shared_inbox) {
+    return res.status(403).json({ error: "This mailbox is read-only — sending is not enabled for shared/delegated inboxes." });
+  }
+
+  // Act using the mailbox's OWN access, not the viewer's — the admin replying to
+  // an email in a shared/delegated inbox must send from that inbox's identity,
+  // not their personal one.
   if (mail_provider === "zoho") {
-    const personRow = await pool.query(
-      `SELECT email, zoho_account_id FROM people WHERE id = $1`, [personId]
+    const ownerRow = await pool.query(
+      `SELECT email, zoho_account_id FROM people WHERE id = $1`, [mailbox_owner_id]
     );
-    const { email: ownerEmail, zoho_account_id: accountId } = personRow.rows[0];
-    const accessToken = await getZohoToken(personId);
+    const { email: ownerEmail, zoho_account_id: accountId } = ownerRow.rows[0];
+    const accessToken = await getZohoToken(mailbox_owner_id);
     await zohoReply(accessToken, accountId, {
       origMessageId: graph_message_id,
       fromAddress:   ownerEmail,
@@ -118,14 +323,14 @@ router.post("/emails/:id/reply", async (req, res) => {
       cc,
     });
   } else {
-    const accessToken = await getMsToken(personId);
+    const { accessToken, mailboxTarget } = await resolveMailboxAccess(mailbox_owner_id);
     const endpoint = replyAll ? "replyAll" : "reply";
     const body = { comment: text.trim() };
     if (cc.length > 0) {
       body.message = { ccRecipients: cc.map((addr) => ({ emailAddress: { address: addr } })) };
     }
     await axios.post(
-      `https://graph.microsoft.com/v1.0/me/messages/${graph_message_id}/${endpoint}`,
+      `${graphBaseFor(mailboxTarget)}/messages/${graph_message_id}/${endpoint}`,
       body,
       { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" } }
     );
@@ -137,16 +342,15 @@ router.post("/emails/:id/reply", async (req, res) => {
 
 // ── Thread summary (on-demand, cached) ────────────────────────────────────────
 router.get("/emails/:id/thread-summary", async (req, res) => {
-  const { personId } = req.session;
-  console.log(`[thread-summary] email=${req.params.id} personId=${personId}`);
+  console.log(`[thread-summary] email=${req.params.id}`);
 
   const { rows } = await pool.query(
-    `SELECT graph_message_id, mail_provider, thread_summary, body_preview, zoho_folder_id FROM emails
-     WHERE id = $1 AND mailbox_owner_id = $2`,
-    [req.params.id, personId]
+    `SELECT graph_message_id, mail_provider, thread_summary, body_preview, zoho_folder_id, mailbox_owner_id
+     FROM emails WHERE id = $1 AND mailbox_owner_id = ANY($2::int[])`,
+    [req.params.id, req.visibleMailboxIds]
   );
   if (!rows.length) {
-    console.log(`[thread-summary] email ${req.params.id} not found for person ${personId}`);
+    console.log(`[thread-summary] email ${req.params.id} not visible to this session`);
     return res.status(404).json({ error: "Not found" });
   }
 
@@ -157,17 +361,18 @@ router.get("/emails/:id/thread-summary", async (req, res) => {
     return res.json({ entries: rows[0].thread_summary });
   }
 
-  // Fetch full body from the right provider
-  const { graph_message_id, mail_provider, body_preview, zoho_folder_id } = rows[0];
+  // Fetch full body from the right provider, using the MAILBOX'S OWN access
+  // (not the viewer's) — required once an admin can view a delegated/shared inbox.
+  const { graph_message_id, mail_provider, body_preview, zoho_folder_id, mailbox_owner_id } = rows[0];
   let fullBody = body_preview || "";
   console.log(`[thread-summary] fetching full body provider=${mail_provider} bodyLen=${fullBody.length} folderId=${zoho_folder_id}`);
 
   try {
     if (mail_provider === "zoho") {
-      const personRow = await pool.query(`SELECT zoho_account_id FROM people WHERE id = $1`, [personId]);
-      const accountId = personRow.rows[0]?.zoho_account_id;
+      const ownerRow = await pool.query(`SELECT zoho_account_id FROM people WHERE id = $1`, [mailbox_owner_id]);
+      const accountId = ownerRow.rows[0]?.zoho_account_id;
       if (accountId) {
-        const token = await getZohoToken(personId);
+        const token = await getZohoToken(mailbox_owner_id);
         // Use folder-based URL (required by Zoho API)
         // If folderId not stored, fetch the message list to find it
         let folderId = zoho_folder_id;
@@ -191,10 +396,10 @@ router.get("/emails/:id/thread-summary", async (req, res) => {
         }
       }
     } else {
-      const token = await getMsToken(personId);
+      const { accessToken, mailboxTarget } = await resolveMailboxAccess(mailbox_owner_id);
       const r = await axios.get(
-        `https://graph.microsoft.com/v1.0/me/messages/${graph_message_id}?$select=body`,
-        { headers: { Authorization: `Bearer ${token}`, Prefer: 'outlook.body-content-type="text"' } }
+        `${graphBaseFor(mailboxTarget)}/messages/${graph_message_id}?$select=body`,
+        { headers: { Authorization: `Bearer ${accessToken}`, Prefer: 'outlook.body-content-type="text"' } }
       );
       fullBody = r.data?.body?.content || fullBody;
     }
@@ -259,12 +464,11 @@ ${cleanBody.slice(0, 8000)}`;
 });
 
 router.post("/emails/:id/action", async (req, res) => {
-  const { personId } = req.session;
   const { id } = req.params;
 
   const { rows } = await pool.query(
-    `SELECT actioned_at FROM emails WHERE id = $1 AND mailbox_owner_id = $2`,
-    [id, personId]
+    `SELECT actioned_at FROM emails WHERE id = $1 AND mailbox_owner_id = ANY($2::int[])`,
+    [id, req.visibleMailboxIds]
   );
   if (!rows.length) return res.status(404).json({ error: "Not found" });
 
@@ -279,7 +483,6 @@ router.post("/emails/:id/action", async (req, res) => {
 
 // ── Global search ─────────────────────────────────────────────────────────────
 router.get("/search", async (req, res) => {
-  const { personId } = req.session;
   const q = (req.query.q || "").trim();
   if (q.length < 2) return res.json({ emails: [] });
 
@@ -287,10 +490,11 @@ router.get("/search", async (req, res) => {
     `SELECT e.id, e.subject, e.from_name, e.from_email, e.received_at,
             e.to_recipients, e.cc_recipients,
             e.is_direct_to_owner, e.urgency, e.is_critical, e.summary, e.actioned_at,
+            e.handled_by_name, e.handled_by_role,
             e.classification_raw, d.name AS department
      FROM emails e
      LEFT JOIN departments d ON d.id = e.department_id
-     WHERE e.mailbox_owner_id = $1
+     WHERE e.mailbox_owner_id = ANY($1::int[])
        AND (e.subject       ILIKE $2
          OR e.from_name     ILIKE $2
          OR e.from_email    ILIKE $2
@@ -299,7 +503,7 @@ router.get("/search", async (req, res) => {
          OR e.to_recipients ILIKE $2)
      ORDER BY e.received_at DESC
      LIMIT 50`,
-    [personId, `%${q}%`]
+    [req.visibleMailboxIds, `%${q}%`]
   );
 
   res.json({ emails: rows, query: q });
@@ -307,12 +511,10 @@ router.get("/search", async (req, res) => {
 
 // ── Auto-reply suggestions ─────────────────────────────────────────────────────
 router.get("/emails/:id/reply-suggestions", async (req, res) => {
-  const { personId } = req.session;
-
   const { rows } = await pool.query(
     `SELECT subject, from_name, from_email, summary, body_preview
-     FROM emails WHERE id = $1 AND mailbox_owner_id = $2`,
-    [req.params.id, personId]
+     FROM emails WHERE id = $1 AND mailbox_owner_id = ANY($2::int[])`,
+    [req.params.id, req.visibleMailboxIds]
   );
   if (!rows.length) return res.status(404).json({ error: "Not found" });
 
@@ -342,6 +544,7 @@ Options should cover: (1) acknowledge + confirm action, (2) request more info / 
 
 router.get("/scores", async (req, res) => {
   const { personId } = req.session;
+  const ids = req.visibleMailboxIds;
 
   // Department-level stats with thread-gap based avg response
   const { rows: deptRows } = await pool.query(
@@ -353,7 +556,7 @@ router.get("/scores", async (req, res) => {
               e.from_email
        FROM emails e
        LEFT JOIN departments d ON d.id = e.department_id
-       WHERE e.mailbox_owner_id = $1
+       WHERE e.mailbox_owner_id = ANY($1::int[])
      ),
      thread_gaps AS (
        SELECT e1.department,
@@ -379,7 +582,7 @@ router.get("/scores", async (req, res) => {
      FROM base b
      GROUP BY b.department
      ORDER BY longest_pending_hours DESC NULLS LAST, total_emails DESC`,
-    [personId]
+    [ids]
   );
 
   // Derive the logged-in user's domain so scores only cover internal teammates
@@ -407,7 +610,7 @@ router.get("/scores", async (req, res) => {
        FROM emails e
        LEFT JOIN contact_mappings cm ON LOWER(cm.email) = LOWER(e.from_email)
        LEFT JOIN departments d ON d.id = e.department_id
-       WHERE e.mailbox_owner_id = $1
+       WHERE e.mailbox_owner_id = ANY($1::int[])
          AND SPLIT_PART(e.from_email, '@', 2) = $2
      ),
      thread_gaps AS (
@@ -439,32 +642,33 @@ router.get("/scores", async (req, res) => {
      FROM base b
      GROUP BY b.from_email, b.sender, b.role_label, b.department
      ORDER BY longest_pending_hours DESC NULLS LAST, total_emails DESC`,
-    [personId, ownerDomain]
+    [ids, ownerDomain]
   );
 
   res.json({ departments: deptRows, senders: senderRows, domain: ownerDomain });
 });
 
 router.get("/emails", async (req, res) => {
-  const { personId } = req.session;
   const { department } = req.query;
 
-  const params = [personId];
+  const params = [req.visibleMailboxIds];
   let departmentFilter = "";
   if (department) {
     params.push(department);
     departmentFilter = `AND d.name = $${params.length}`;
   }
+  const range = dateRangeFilter(req, params);
 
   const { rows } = await pool.query(
     `SELECT e.id, e.subject, e.from_name, e.from_email, e.received_at,
             e.to_recipients, e.cc_recipients,
             e.is_direct_to_owner, e.urgency, e.is_critical, e.summary, e.actioned_at,
-            d.name AS department, p.display_name AS attributed_to
+            d.name AS department, p.display_name AS attributed_to,
+            e.handled_by_name, e.handled_by_role
      FROM emails e
      LEFT JOIN departments d ON d.id = e.department_id
      LEFT JOIN people p ON p.id = e.attributed_person_id
-     WHERE e.mailbox_owner_id = $1 ${departmentFilter}
+     WHERE e.mailbox_owner_id = ANY($1::int[]) ${departmentFilter} ${range}
      ORDER BY e.is_critical DESC, e.received_at DESC
      LIMIT 200`,
     params

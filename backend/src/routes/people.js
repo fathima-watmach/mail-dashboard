@@ -1,10 +1,11 @@
 const express = require("express");
 const router = express.Router();
 const pool = require("../db/pool");
-const { requireLogin } = require("../middleware/auth");
+const { requireLogin, attachVisibility } = require("../middleware/auth");
 const { extractSuggestion } = require("../services/signatureParser");
+const { resolveMailboxAccess } = require("../services/mailboxAccess");
 
-router.use(requireLogin);
+router.use(requireLogin, attachVisibility);
 
 // Discover all unique email addresses seen in emails, grouped by domain,
 // with their current mapping status
@@ -92,32 +93,36 @@ router.get("/suggest", async (req, res) => {
 
   const addr = email.toLowerCase().trim();
   const axios = require("axios");
-  const { getValidAccessToken } = require("../services/msAuth");
+  const { graphBaseFor } = require("../services/graphMail");
 
-  // Find graph_message_ids for emails where this person appears
+  // Find graph_message_ids for emails where this person appears, scoped to
+  // mailboxes this session can actually see.
   const { rows: msgRows } = await pool.query(
-    `SELECT DISTINCT graph_message_id, from_email, from_name
+    `SELECT DISTINCT graph_message_id, from_email, from_name, mailbox_owner_id
      FROM emails
-     WHERE LOWER(from_email) = $1
-        OR to_recipients ILIKE $2
-        OR cc_recipients ILIKE $2
-        OR body_preview   ILIKE $2
+     WHERE mailbox_owner_id = ANY($1::int[])
+       AND (LOWER(from_email) = $2
+        OR to_recipients ILIKE $3
+        OR cc_recipients ILIKE $3
+        OR body_preview   ILIKE $3)
      LIMIT 5`,
-    [addr, `%${addr}%`]
+    [req.visibleMailboxIds, addr, `%${addr}%`]
   );
 
   if (msgRows.length === 0) {
     return res.json({ suggestion: { display_name: null, role_label: null, sources: [] } });
   }
 
-  // Fetch full plain-text body from Graph for each message
-  const accessToken = await getValidAccessToken(req.session.personId);
+  // Fetch full plain-text body from Graph for each message, using that message's
+  // OWN mailbox access — a Graph message ID is only valid within the mailbox it
+  // came from, and different rows may now belong to different (delegated) mailboxes.
   const fullBodies = [];
 
   for (const row of msgRows) {
     try {
+      const { accessToken, mailboxTarget } = await resolveMailboxAccess(row.mailbox_owner_id);
       const r = await axios.get(
-        `https://graph.microsoft.com/v1.0/me/messages/${row.graph_message_id}?$select=body`,
+        `${graphBaseFor(mailboxTarget)}/messages/${row.graph_message_id}?$select=body`,
         { headers: { Authorization: `Bearer ${accessToken}`, Prefer: 'outlook.body-content-type="text"' } }
       );
       fullBodies.push({

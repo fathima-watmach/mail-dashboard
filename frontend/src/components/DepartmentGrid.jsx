@@ -18,7 +18,7 @@ export default function DepartmentGrid({ buckets, onSelect, selected }) {
           <button
             key={dept}
             onClick={() => onSelect(isSelected ? null : dept)}
-            className={`text-left border rounded-xl p-4 transition-all
+            className={`text-left border rounded-xl p-3.5 transition-all
               ${isSelected
                 ? "border-brand bg-brand text-white shadow-md"
                 : "border-gray-100 bg-white text-gray-700 hover:border-brand/30 hover:shadow-sm"
@@ -27,10 +27,10 @@ export default function DepartmentGrid({ buckets, onSelect, selected }) {
             <p className={`text-xs font-medium uppercase tracking-wide truncate ${isSelected ? "text-white/70" : "text-gray-400"}`}>
               {dept}
             </p>
-            <p className={`text-3xl font-bold mt-1 ${isSelected ? "text-white" : "text-brand"}`}>
+            <p className={`text-2xl font-bold mt-0.5 ${isSelected ? "text-white" : "text-brand"}`}>
               {total}
             </p>
-            <div className={`flex gap-3 mt-2 text-xs ${isSelected ? "text-white/70" : "text-gray-400"}`}>
+            <div className={`flex gap-3 mt-1.5 text-xs ${isSelected ? "text-white/70" : "text-gray-400"}`}>
               {counts.action_needed > 0 && (
                 <span className={`font-medium ${isSelected ? "text-white" : "text-gray-600"}`}>
                   {counts.action_needed} action

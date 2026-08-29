@@ -2,6 +2,15 @@ const axios = require("axios");
 
 const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
 
+/**
+ * Returns the Graph API base path for a mailbox: the caller's own mailbox
+ * ("/me") by default, or a shared mailbox reached via delegated access
+ * ("/users/{mailboxTarget}") when one is given.
+ */
+function graphBaseFor(mailboxTarget) {
+  return mailboxTarget ? `${GRAPH_BASE}/users/${encodeURIComponent(mailboxTarget)}` : `${GRAPH_BASE}/me`;
+}
+
 // Capture the first 2000 chars (context for LLM) + last 1500 chars (where signatures live).
 // For short emails this is just the full text.
 function extractBodyText(raw) {
@@ -18,7 +27,7 @@ function extractBodyText(raw) {
  * sorted newest first. Later this can be upgraded to Graph's delta query
  * for efficient incremental sync instead of re-fetching a fixed window.
  */
-async function fetchRecentMessages(accessToken, { top = 50 } = {}) {
+async function fetchRecentMessages(accessToken, { top = 50, mailboxTarget = null, since = null } = {}) {
   const select = [
     "id",
     "conversationId",
@@ -30,7 +39,10 @@ async function fetchRecentMessages(accessToken, { top = 50 } = {}) {
     "body",
   ].join(",");
 
-  const url = `${GRAPH_BASE}/me/messages?$top=${top}&$orderby=receivedDateTime desc&$select=${select}`;
+  let url = `${graphBaseFor(mailboxTarget)}/messages?$top=${top}&$orderby=receivedDateTime desc&$select=${select}`;
+  if (since) {
+    url += `&$filter=${encodeURIComponent(`receivedDateTime ge ${since}`)}`;
+  }
 
   const response = await axios.get(url, {
     headers: {
@@ -72,4 +84,4 @@ function normalizeMessage(rawMessage, ownerEmail, ownerAliases = []) {
   };
 }
 
-module.exports = { fetchRecentMessages, normalizeMessage };
+module.exports = { fetchRecentMessages, normalizeMessage, graphBaseFor };

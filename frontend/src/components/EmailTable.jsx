@@ -198,6 +198,9 @@ function Row({ email, onToggle }) {
           <td />
           <td colSpan={5} className="px-3 py-2 text-xs text-gray-500 space-y-1">
             <p><span className="font-medium text-gray-700 w-6 inline-block">From</span> {email.from_name ? `${email.from_name} <${email.from_email}>` : email.from_email}</p>
+            {(email.handled_by_name || email.handled_by_role) && (
+              <p><span className="font-medium text-gray-700 inline-block">Handled by</span> {[email.handled_by_name, email.handled_by_role].filter(Boolean).join(" — ")}</p>
+            )}
             {email.to_recipients && <p><span className="font-medium text-gray-700 w-6 inline-block">To</span> {email.to_recipients}</p>}
             {email.cc_recipients && email.cc_recipients !== "Not Provided" && (
               <p><span className="font-medium text-gray-700 w-6 inline-block">Cc</span> {email.cc_recipients}</p>
@@ -229,7 +232,7 @@ function Row({ email, onToggle }) {
                       <button
                         key={i}
                         onClick={e => { e.stopPropagation(); useSuggestion(s); }}
-                        className="block w-full text-left text-xs bg-brand-light text-brand border border-brand-light rounded-lg px-3 py-2 hover:bg-blue-100 hover:border-brand transition-colors"
+                        className="block w-full text-left text-xs bg-brand-light text-brand border border-brand-light rounded-lg px-3 py-2 hover:bg-brand-light hover:border-brand transition-colors"
                       >
                         {s}
                       </button>

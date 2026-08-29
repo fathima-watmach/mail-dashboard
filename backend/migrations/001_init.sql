@@ -150,11 +150,26 @@ WHERE r.name = 'Team Member' AND p.key IN
   ('view_own_data_only')
 ON CONFLICT DO NOTHING;
 
-INSERT INTO departments (name) VALUES
-  ('Sales'),
-  ('Pre-sales'),
-  ('Operations & Procurement'),
-  ('Escalations'),
-  ('Finance'),
-  ('Projects')
-ON CONFLICT (name) DO NOTHING;
+-- Guarded: migration 009 later adds a NOT NULL departments.client_id and drops
+-- the plain UNIQUE(name) constraint this insert originally relied on. Every
+-- migration file re-runs on every `npm run migrate` (no applied-migrations
+-- ledger), so on any run after 009 has already executed once, this insert would
+-- otherwise fail — the column doesn't exist yet at this exact point in a truly
+-- fresh run (migrations execute in file order, and 009 hasn't run yet within
+-- that same pass), which is the only case this guard lets it proceed.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'departments' AND column_name = 'client_id'
+  ) THEN
+    INSERT INTO departments (name) VALUES
+      ('Sales'),
+      ('Pre-sales'),
+      ('Operations & Procurement'),
+      ('Escalations'),
+      ('Finance'),
+      ('Projects')
+    ON CONFLICT (name) DO NOTHING;
+  END IF;
+END $$;

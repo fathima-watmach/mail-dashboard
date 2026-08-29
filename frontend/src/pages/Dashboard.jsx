@@ -1,14 +1,26 @@
 import React, { useEffect, useState, useCallback } from "react";
-import { getSummary, getBuckets, getEscalations, getActionNeeded, getEmails, logout, searchEmails } from "../api";
+import { getSummary, getBuckets, getEscalations, getActionNeeded, getEmails, getTrends, getAnalytics, logout, searchEmails } from "../api";
 import StatCard from "../components/StatCard";
 import DepartmentGrid from "../components/DepartmentGrid";
 import EscalationList from "../components/EscalationList";
 import EmailTable from "../components/EmailTable";
+import TrendsChart from "../components/TrendsChart";
+import AnalyticsView from "../components/AnalyticsView";
 import People from "./People";
 import Calendar from "./Calendar";
 import Scores from "./Scores";
+import watmachLogo from "../assets/watmach-logo.png";
 
-const TABS = ["overview", "action needed", "escalations", "all emails", "calendar", "people", "scores"];
+function financialYearStart() {
+  const now = new Date();
+  const fyYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+  return new Date(fyYear, 3, 1).toISOString().slice(0, 10);
+}
+function today() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+const TABS = ["overview", "action needed", "escalations", "all emails", "calendar", "people", "scores", "analytics"];
 
 export default function Dashboard({ user, onLogout }) {
   const [summary, setSummary] = useState({ total: 0, critical: 0, actionNeeded: 0, escalations: 0 });
@@ -16,23 +28,28 @@ export default function Dashboard({ user, onLogout }) {
   const [escalations, setEscalations] = useState([]);
   const [actionEmails, setActionEmails] = useState([]);
   const [allEmails, setAllEmails] = useState([]);
+  const [trends, setTrends] = useState([]);
   const [selectedDept, setSelectedDept] = useState(null);
   const [allEmailsLoading, setAllEmailsLoading] = useState(false);
+  const [analytics, setAnalytics] = useState(null);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [tab, setTab] = useState("overview");
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchActive, setSearchActive] = useState(false);
+  const [range, setRange] = useState({ from: financialYearStart(), to: today() });
 
   const loadSummary = useCallback(() =>
-    getSummary().then(setSummary).catch(console.error), []);
+    getSummary(range).then(setSummary).catch(console.error), [range]);
 
   useEffect(() => {
     loadSummary();
-    getBuckets().then((d) => setBuckets(d.buckets)).catch(console.error);
-    getEscalations().then((d) => setEscalations(d.escalations)).catch(console.error);
-    getActionNeeded().then((d) => setActionEmails(d.emails)).catch(console.error);
-  }, []);
+    getBuckets(range).then((d) => setBuckets(d.buckets)).catch(console.error);
+    getEscalations(false, range).then((d) => setEscalations(d.escalations)).catch(console.error);
+    getActionNeeded(range).then((d) => setActionEmails(d.emails)).catch(console.error);
+    getTrends(range).then((d) => setTrends(d.days)).catch(console.error);
+  }, [range]);
 
   useEffect(() => {
     if (tab !== "all emails") return;
@@ -42,6 +59,15 @@ export default function Dashboard({ user, onLogout }) {
       .catch(console.error)
       .finally(() => setAllEmailsLoading(false));
   }, [tab, selectedDept]);
+
+  useEffect(() => {
+    if (tab !== "analytics") return;
+    setAnalyticsLoading(true);
+    getAnalytics(range)
+      .then(setAnalytics)
+      .catch(console.error)
+      .finally(() => setAnalyticsLoading(false));
+  }, [tab, range]);
 
   const handleLogout = async () => { await logout(); onLogout(); };
 
@@ -68,13 +94,8 @@ export default function Dashboard({ user, onLogout }) {
       {/* Header */}
       <header className="bg-brand px-6 py-3 flex items-center justify-between sticky top-0 z-10">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 bg-white/20 rounded-lg flex items-center justify-center">
-            <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-            </svg>
-          </div>
-          <span className="font-semibold text-white tracking-wide">WATMACH</span>
+          <img src={watmachLogo} alt="Watmach" className="h-10 w-auto" />
+          <span className="text-white font-semibold text-lg tracking-wide">Beacon</span>
         </div>
         <div className="flex items-center gap-3">
           {/* Global search */}
@@ -144,27 +165,49 @@ export default function Dashboard({ user, onLogout }) {
         {/* ── OVERVIEW ── */}
         {tab === "overview" && (
           <div className="space-y-6">
-            {/* Data range badge */}
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-400 bg-gray-50 border border-gray-100 rounded-full px-3 py-1">
-                Showing emails: <span className="font-medium text-gray-600">{(() => {
-                  const now = new Date();
-                  const fyYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
-                  return `Apr ${fyYear}`;
-                })()} – Present</span>
-              </span>
+            {/* Editable date range */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs text-gray-400">Showing emails:</span>
+              <input
+                type="date"
+                value={range.from}
+                max={range.to}
+                onChange={(e) => setRange((r) => ({ ...r, from: e.target.value }))}
+                className="text-xs text-gray-600 bg-gray-50 border border-gray-100 rounded-full px-3 py-1 focus:outline-none focus:border-brand"
+              />
+              <span className="text-xs text-gray-400">to</span>
+              <input
+                type="date"
+                value={range.to}
+                min={range.from}
+                max={today()}
+                onChange={(e) => setRange((r) => ({ ...r, to: e.target.value }))}
+                className="text-xs text-gray-600 bg-gray-50 border border-gray-100 rounded-full px-3 py-1 focus:outline-none focus:border-brand"
+              />
             </div>
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               <StatCard label="Total emails"   value={summary.total}        color="blue"  onClick={() => setTab("all emails")} />
               <StatCard label="Highly Critical" value={summary.critical}    color="red"   sub="Action today"    onClick={() => setTab("action needed")} />
               <StatCard label="Action Needed"  value={summary.actionNeeded} color="amber" sub="Direct to you"   onClick={() => setTab("action needed")} />
-              <StatCard label="Escalations"    value={summary.escalations}  color="green" sub="Needs attention" onClick={() => setTab("escalations")} />
+              <StatCard label="Escalations"    value={summary.escalations}  color="orange" sub="Needs attention" onClick={() => setTab("escalations")} />
             </div>
 
             <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
               <h2 className="text-sm font-semibold text-gray-700 mb-4">By Department</h2>
               <DepartmentGrid buckets={buckets} selected={selectedDept}
                 onSelect={(d) => { setSelectedDept(d); setTab("all emails"); }} />
+            </div>
+
+            <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
+              <h2 className="text-sm font-semibold text-gray-700 mb-4">Trends</h2>
+              <TrendsChart
+                days={trends}
+                series={[
+                  { key: "fyi", color: "#2a78d6", label: "FYI" },
+                  { key: "actionNeeded", color: "#eb6834", label: "Action needed" },
+                ]}
+                lineSeries={{ key: "escalations", color: "#1baf7a", label: "Escalations" }}
+              />
             </div>
 
             {escalations.length > 0 && (
@@ -231,6 +274,9 @@ export default function Dashboard({ user, onLogout }) {
 
         {/* ── SCORES ── */}
         {tab === "scores" && <Scores />}
+
+        {/* ── ANALYTICS ── */}
+        {tab === "analytics" && <AnalyticsView analytics={analytics} loading={analyticsLoading} />}
       </main>
     </div>
   );

@@ -6,17 +6,18 @@ export default {
         sans: ['Inter', 'sans-serif'],
       },
       colors: {
+        // Sourced directly from the Watmach logo (frontend/src/assets/watmach-logo.png)
         navy: {
-          DEFAULT: "#0D1A3A",
-          light:   "#162347",
-          muted:   "#1E2D52",
-          border:  "#253566",
+          DEFAULT: "#0b1634",
+          light:   "#16224a",
+          muted:   "#1f2c54",
+          border:  "#2a3768",
         },
         brand: {
-          DEFAULT: "#3B5CE8",
-          hover:   "#2E4DD4",
-          light:   "#EEF1FD",
-          muted:   "#7B95F0",
+          DEFAULT: "#0b1634",  // logo navy — primary interactive color across the app
+          hover:   "#16224a",
+          light:   "#eef1f7",  // pale navy-tinted white, for subtle highlights on white surfaces
+          muted:   "#2c419e",  // logo's secondary accent blue — used sparingly
         },
       },
     },

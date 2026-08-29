@@ -2,7 +2,17 @@ const axios = require("axios");
 const pool = require("../db/pool");
 
 const AUTHORITY = `https://login.microsoftonline.com/common`;
-const SCOPES = ["Mail.Read", "Mail.Send", "Calendars.ReadWrite", "User.Read", "offline_access"].join(" ");
+// Mail.Read.Shared covers mailboxes this account has been granted Full Access
+// delegation on (e.g. shared inboxes like contactus@/maintenance@) — no separate
+// login for those mailboxes is needed once delegation is granted in Exchange
+// Admin Center. Deliberately NOT requesting Mail.Send.Shared: clients granting
+// delegated access to a shared inbox typically want READ-ONLY (no send/modify/
+// delete/move) — see AGENTS.md. Mail.Send here only ever covers the signed-in
+// account's own mailbox.
+const SCOPES = [
+  "Mail.Read", "Mail.Send", "Mail.Read.Shared",
+  "Calendars.ReadWrite", "User.Read", "offline_access",
+].join(" ");
 
 /**
  * Builds the URL to redirect the user to for Microsoft sign-in/consent.
@@ -71,17 +81,21 @@ async function getMe(accessToken) {
   return response.data; // { mail, userPrincipalName, displayName, ... }
 }
 
+const TOKEN_ENCRYPTION_KEY = process.env.TOKEN_ENCRYPTION_KEY;
+
 /**
- * Saves or updates tokens for a person in the database.
+ * Saves or updates tokens for a person in the database. Tokens are encrypted at
+ * rest with pgcrypto — plaintext tokens are a much bigger liability once a token
+ * can grant delegated access to a shared company mailbox, not just one inbox.
  */
 async function saveTokens(personId, tokenResponse) {
   const expiresAt = new Date(Date.now() + tokenResponse.expires_in * 1000);
   await pool.query(
     `INSERT INTO oauth_tokens (person_id, provider, access_token, refresh_token, expires_at, updated_at)
-     VALUES ($1, 'microsoft', $2, $3, $4, now())
+     VALUES ($1, 'microsoft', pgp_sym_encrypt($2, $5), pgp_sym_encrypt($3, $5), $4, now())
      ON CONFLICT (person_id, provider)
-     DO UPDATE SET access_token = $2, refresh_token = $3, expires_at = $4, updated_at = now()`,
-    [personId, tokenResponse.access_token, tokenResponse.refresh_token, expiresAt]
+     DO UPDATE SET access_token = pgp_sym_encrypt($2, $5), refresh_token = pgp_sym_encrypt($3, $5), expires_at = $4, updated_at = now()`,
+    [personId, tokenResponse.access_token, tokenResponse.refresh_token, expiresAt, TOKEN_ENCRYPTION_KEY]
   );
 }
 
@@ -90,8 +104,11 @@ async function saveTokens(personId, tokenResponse) {
  */
 async function getValidAccessToken(personId) {
   const { rows } = await pool.query(
-    `SELECT access_token, refresh_token, expires_at FROM oauth_tokens WHERE person_id = $1 AND provider = 'microsoft'`,
-    [personId]
+    `SELECT pgp_sym_decrypt(access_token, $2) AS access_token,
+            pgp_sym_decrypt(refresh_token, $2) AS refresh_token,
+            expires_at
+     FROM oauth_tokens WHERE person_id = $1 AND provider = 'microsoft'`,
+    [personId, TOKEN_ENCRYPTION_KEY]
   );
   if (rows.length === 0) {
     throw new Error(`No stored tokens for person_id ${personId}. They need to connect their mailbox first.`);

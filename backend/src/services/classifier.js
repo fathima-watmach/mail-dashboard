@@ -6,6 +6,12 @@ const { callLlm } = require("./llmQueue");
  * Today this calls DeepSeek. Swapping to Claude/OpenAI later means writing
  * one new function with this same signature and changing CLASSIFIER_PROVIDER
  * below - nothing else in the pipeline needs to change.
+ *
+ * Department/category taxonomy is per-client (different clients run entirely
+ * different businesses — e.g. Sales/Pre-sales/... vs MEP/Civil/...), so it's
+ * passed in as `departmentNames` rather than hardcoded here. Callers resolve
+ * the right list from the `departments` table, scoped to the mailbox's client
+ * (see services/ingest.js).
  */
 
 function extractJson(rawText) {
@@ -16,18 +22,10 @@ function extractJson(rawText) {
   return JSON.parse(slice);
 }
 
-const DEPARTMENTS = [
-  "Sales",
-  "Pre-sales",
-  "Operations & Procurement",
-  "Finance",
-  "Projects",
-];
-
-function buildClassificationPrompt(email) {
+function buildClassificationPrompt(email, departmentNames) {
   return `You are classifying a business email for an executive dashboard.
 
-Departments (pick exactly one): ${DEPARTMENTS.join(", ")}
+Departments (pick exactly one): ${departmentNames.join(", ")}
 
 Email:
 From: ${email.fromName} <${email.fromEmail}>
@@ -47,8 +45,8 @@ Respond with ONLY valid JSON, no markdown, in this exact shape:
 {"department":"...","urgency":"action_needed or fyi","is_escalation":true or false,"is_critical":true or false,"summary":"...","reasoning":"..."}`;
 }
 
-async function classifyWithDeepSeek(email) {
-  const prompt = buildClassificationPrompt(email);
+async function classifyWithDeepSeek(email, departmentNames) {
+  const prompt = buildClassificationPrompt(email, departmentNames);
 
   const response = await axios.post(
     `${process.env.DEEPSEEK_BASE_URL}/chat/completions`,
@@ -75,9 +73,9 @@ async function classifyWithDeepSeek(email) {
     throw new Error(`Failed to parse classifier response as JSON: ${rawText}`);
   }
 
-  if (!DEPARTMENTS.includes(parsed.department)) {
+  if (!departmentNames.includes(parsed.department)) {
     // Fall back gracefully rather than crashing the whole ingestion run
-    parsed.department = "Operations & Procurement";
+    parsed.department = departmentNames[0];
     parsed.reasoning = (parsed.reasoning || "") + " [fallback: unrecognized department from model]";
   }
 
@@ -94,8 +92,8 @@ async function classifyWithDeepSeek(email) {
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-async function classifyWithGroq(email) {
-  const prompt = buildClassificationPrompt(email);
+async function classifyWithGroq(email, departmentNames) {
+  const prompt = buildClassificationPrompt(email, departmentNames);
 
   // Routes through the global queue — serialized with thread summaries and all other calls
   const response = await callLlm(() => axios.post(
@@ -114,8 +112,8 @@ async function classifyWithGroq(email) {
     throw new Error(`Failed to parse Groq classifier response as JSON: ${rawText}`);
   }
 
-  if (!DEPARTMENTS.includes(parsed.department)) {
-    parsed.department = "Operations & Procurement";
+  if (!departmentNames.includes(parsed.department)) {
+    parsed.department = departmentNames[0];
     parsed.reasoning = (parsed.reasoning || "") + " [fallback: unrecognized department from model]";
   }
 
@@ -130,8 +128,8 @@ async function classifyWithGroq(email) {
   };
 }
 
-async function classifyWithGemini(email) {
-  const prompt = buildClassificationPrompt(email);
+async function classifyWithGemini(email, departmentNames) {
+  const prompt = buildClassificationPrompt(email, departmentNames);
 
   const response = await callLlm(() => axios.post(
     "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
@@ -154,8 +152,8 @@ async function classifyWithGemini(email) {
     throw new Error(`Failed to parse Gemini classifier response as JSON: ${rawText}`);
   }
 
-  if (!DEPARTMENTS.includes(parsed.department)) {
-    parsed.department = "Operations & Procurement";
+  if (!departmentNames.includes(parsed.department)) {
+    parsed.department = departmentNames[0];
     parsed.reasoning = (parsed.reasoning || "") + " [fallback: unrecognized department from model]";
   }
 
@@ -170,8 +168,8 @@ async function classifyWithGemini(email) {
   };
 }
 
-async function classifyWithOllama(email) {
-  const prompt = buildClassificationPrompt(email);
+async function classifyWithOllama(email, departmentNames) {
+  const prompt = buildClassificationPrompt(email, departmentNames);
 
   const response = await axios.post(
     "http://localhost:11434/v1/chat/completions",
@@ -193,8 +191,8 @@ async function classifyWithOllama(email) {
     throw new Error(`Failed to parse Ollama classifier response as JSON: ${rawText}`);
   }
 
-  if (!DEPARTMENTS.includes(parsed.department)) {
-    parsed.department = "Operations & Procurement";
+  if (!departmentNames.includes(parsed.department)) {
+    parsed.department = departmentNames[0];
     parsed.reasoning = (parsed.reasoning || "") + " [fallback: unrecognized department from model]";
   }
 
@@ -209,20 +207,23 @@ async function classifyWithOllama(email) {
   };
 }
 
-async function classifyEmail(email) {
+async function classifyEmail(email, departmentNames) {
+  if (!departmentNames?.length) {
+    throw new Error("classifyEmail requires a non-empty departmentNames list for this mailbox's client");
+  }
   const provider = process.env.CLASSIFIER_PROVIDER || "deepseek";
   switch (provider) {
     case "gemini":
-      return classifyWithGemini(email);
+      return classifyWithGemini(email, departmentNames);
     case "deepseek":
-      return classifyWithDeepSeek(email);
+      return classifyWithDeepSeek(email, departmentNames);
     case "groq":
-      return classifyWithGroq(email);
+      return classifyWithGroq(email, departmentNames);
     case "ollama":
-      return classifyWithOllama(email);
+      return classifyWithOllama(email, departmentNames);
     default:
       throw new Error(`Unknown classifier provider: ${provider}`);
   }
 }
 
-module.exports = { classifyEmail, DEPARTMENTS };
+module.exports = { classifyEmail };
