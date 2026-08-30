@@ -7,6 +7,10 @@ response-time trend, activity heatmap). Originally built for a single company; n
 serves **multiple clients** from one deployment (see "Current production state"
 below).
 
+**New here? Start with [HOW_IT_WORKS.md](HOW_IT_WORKS.md)** — a plain-English,
+diagram-led walkthrough of what this dashboard does end to end, no technical
+background assumed.
+
 For the full technical architecture, gotchas, and repo layout, see **[AGENTS.md](AGENTS.md)**
 — that's the primary reference for working in this codebase (written for an AI
 coding agent, but a human will get just as much out of it). This file is the
