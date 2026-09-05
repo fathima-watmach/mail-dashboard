@@ -18,6 +18,15 @@ npm-debug.log*
 .DS_Store
 Thumbs.db
 
+# Python virtualenv (unrelated to this Node project, left over from a local tool)
+.venv/
+
+# Reference documents dropped in the repo root for context during a session —
+# not project source, shouldn't be committed
+*.pdf
+*.xlsx
+~$*
+
 # Claude Code personal settings/hooks (not shared with the team)
 .claude/settings.local.json
 .claude/.agents-md-stop-pending

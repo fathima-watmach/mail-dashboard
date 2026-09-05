@@ -3,6 +3,7 @@ import StatCard from "./StatCard";
 import TrendsChart from "./TrendsChart";
 import ResponseTrendChart from "./ResponseTrendChart";
 import ActivityHeatmap from "./ActivityHeatmap";
+import { deltaSub } from "./shared";
 
 const CATEGORY_LABEL = { urgent: "Urgent", reply: "Reply", fyi: "FYI" };
 const CATEGORY_BADGE = {
@@ -10,12 +11,6 @@ const CATEGORY_BADGE = {
   reply: "bg-blue-50 text-brand",
   fyi: "bg-gray-100 text-gray-500",
 };
-
-function deltaSub(deltaPct, unit = "") {
-  if (deltaPct == null) return undefined;
-  const sign = deltaPct > 0 ? "+" : "";
-  return `${sign}${deltaPct}%${unit} vs. previous period`;
-}
 
 export default function AnalyticsView({ analytics, loading }) {
   if (loading || !analytics) {
@@ -45,9 +40,10 @@ export default function AnalyticsView({ analytics, loading }) {
         <TrendsChart
           days={volumeByDay}
           series={[
-            { key: "fyi", color: "#2a78d6", label: "FYI" },
-            { key: "reply", color: "#1baf7a", label: "Needs reply" },
-            { key: "urgent", color: "#eb6834", label: "Urgent" },
+            { key: "low", color: "#9ca3af", label: "Low" },
+            { key: "medium", color: "#f59e0b", label: "Medium" },
+            { key: "high", color: "#fb923c", label: "High" },
+            { key: "critical", color: "#dc2626", label: "Critical" },
           ]}
         />
       </div>
@@ -55,8 +51,8 @@ export default function AnalyticsView({ analytics, loading }) {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
           <h2 className="text-sm font-semibold text-gray-700 mb-1">Response time trend</h2>
-          <p className="text-xs text-gray-400 mb-4">Avg. hours to first reply, weekly</p>
-          <ResponseTrendChart weeks={responseTrend} />
+          <p className="text-xs text-gray-400 mb-4">Avg. hours to first reply, daily</p>
+          <ResponseTrendChart weeks={responseTrend} unitLabel="On" />
         </div>
 
         <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">

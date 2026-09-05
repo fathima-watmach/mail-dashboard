@@ -1,5 +1,6 @@
 const axios = require("axios");
 const { callLlm } = require("./llmQueue");
+const { assertBudgetAvailable, recordUsage } = require("./llmBudget");
 
 function extractJson(raw) {
   const objStart = raw.indexOf("{");
@@ -14,53 +15,30 @@ function extractJson(raw) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Gemini-only — thread summaries and reply suggestions share the same
+// monthly budget cap and rate-limit queue as classification (classifier.js).
 async function callLLM(prompt, { maxTokens = 800, retries = 3 } = {}) {
-  const provider = process.env.CLASSIFIER_PROVIDER || "deepseek";
-
-  // Groq and Gemini go through the shared rate-limit queue — serialized with the classifier
-  if (provider === "groq") {
-    const r = await callLlm(() => axios.post(
-      "https://api.groq.com/openai/v1/chat/completions",
-      { model: process.env.GROQ_MODEL || "llama-3.1-8b-instant", messages: [{ role: "user", content: prompt }], temperature: 0, max_tokens: maxTokens },
-      { headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" } }
-    ));
-    return r.data.choices[0].message.content.trim();
-  }
-
-  if (provider === "gemini") {
-    const r = await callLlm(() => axios.post(
-      "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-      { model: process.env.GEMINI_MODEL || "gemini-2.0-flash", messages: [{ role: "user", content: prompt }], temperature: 0, max_tokens: maxTokens },
-      { headers: { Authorization: `Bearer ${process.env.GEMINI_API_KEY}`, "Content-Type": "application/json" } }
-    ));
-    return r.data.choices[0].message.content.trim();
-  }
-
-  // DeepSeek / Ollama use a simple retry loop (not queue-managed)
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      if (provider === "deepseek") {
-        const r = await axios.post(
-          `${process.env.DEEPSEEK_BASE_URL}/chat/completions`,
-          { model: process.env.DEEPSEEK_MODEL || "deepseek-chat", messages: [{ role: "user", content: prompt }], temperature: 0, max_tokens: maxTokens },
-          { headers: { Authorization: `Bearer ${process.env.DEEPSEEK_API_KEY}`, "Content-Type": "application/json" } }
-        );
-        return r.data.choices[0].message.content.trim();
-      }
-
-      // ollama (local dev only)
-      const r = await axios.post(
-        "http://localhost:11434/v1/chat/completions",
-        { model: process.env.OLLAMA_MODEL || "llama3", messages: [{ role: "user", content: prompt }], temperature: 0, max_tokens: maxTokens },
-        { headers: { "Content-Type": "application/json" } }
-      );
+      await assertBudgetAvailable();
+      const r = await callLlm(() => axios.post(
+        "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        { model: process.env.GEMINI_MODEL || "gemini-3.5-flash-lite", messages: [{ role: "user", content: prompt }], temperature: 0, max_tokens: maxTokens },
+        { headers: { Authorization: `Bearer ${process.env.GEMINI_API_KEY}`, "Content-Type": "application/json" } }
+      ));
+      await recordUsage(r.data.usage);
       return r.data.choices[0].message.content.trim();
-
     } catch (err) {
-      const is429 = err.response?.status === 429;
-      if (is429 && attempt < retries) {
-        const wait = attempt * 10000;
-        console.warn(`[llm] Rate limited (429), retrying in ${wait / 1000}s (attempt ${attempt}/${retries})`);
+      const status = err.response?.status;
+      const is429 = status === 429;
+      // 5xx (503 especially — Gemini flash-lite returns this under transient
+      // overload, seen for real: "Could not build thread context" errors
+      // traced back to a bare 503 with zero retry) is worth retrying with a
+      // short backoff, same as 429 but faster since it's not a quota wait.
+      const is5xx = status >= 500 && status < 600;
+      if ((is429 || is5xx) && attempt < retries) {
+        const wait = is429 ? attempt * 10000 : attempt * 3000;
+        console.warn(`[llm] ${status} error, retrying in ${wait / 1000}s (attempt ${attempt}/${retries})`);
         await sleep(wait);
         continue;
       }

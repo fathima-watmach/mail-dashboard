@@ -16,12 +16,14 @@ function decodeHtml(str) {
     .replace(/&apos;/g, "'");
 }
 
-// Capture HEAD + TAIL so signatures (at the end) are always included
+// Capture HEAD + TAIL so signatures (at the end) are always included.
+// Raised from 2000/1500 on 2026-09-05 — same fix as graphMail.js's
+// No length cap on stored body text — see graphMail.js's extractBodyText
+// for the full reasoning. The only place that ever needed a size bound was
+// a single classifier LLM call, and that cap now lives in classifier.js at
+// prompt-build time instead of here at storage time.
 function extractBodyText(raw) {
-  const text = (raw || "").trim();
-  const HEAD = 2000, TAIL = 1500;
-  if (text.length <= HEAD + TAIL) return text;
-  return text.slice(0, HEAD) + "\n…\n" + text.slice(-TAIL);
+  return (raw || "").trim();
 }
 
 /**
@@ -169,6 +171,30 @@ async function sendReply(accessToken, accountId, { origMessageId, fromAddress, t
 }
 
 /**
+ * Sends a brand-new message from the token owner's own Zoho account — same
+ * "reply as the logged-in dashboard user, not as the original mailbox"
+ * reasoning as graphMail.js's sendNewMail. No origMsgId/action means Zoho
+ * treats this as a fresh compose+send rather than an in-thread reply.
+ */
+async function sendNewMail(accessToken, accountId, { fromAddress, to, cc = [], subject, text }) {
+  const payload = {
+    fromAddress,
+    toAddress:  to.join(", "),
+    subject,
+    content:    text,
+    mailFormat: "plaintext",
+  };
+  if (cc.length > 0) payload.ccAddress = cc.join(", ");
+
+  const { data } = await axios.post(
+    `${MAIL_BASE}/accounts/${accountId}/messages`,
+    payload,
+    { headers: { ...authHeader(accessToken), "Content-Type": "application/json" } }
+  );
+  return data;
+}
+
+/**
  * Fetches sent emails from the Sent folder and matches them to received emails
  * by conversationId, then populates first_reply_at on matched emails.
  */
@@ -225,4 +251,4 @@ async function syncSentReplies(accessToken, accountId, sentFolderId, personId, p
   return matched;
 }
 
-module.exports = { getAccountId, fetchRecentMessages, normalizeMessage, sendReply, syncSentReplies };
+module.exports = { getAccountId, fetchRecentMessages, normalizeMessage, sendReply, sendNewMail, syncSentReplies };

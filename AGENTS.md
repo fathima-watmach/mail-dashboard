@@ -21,9 +21,12 @@ snapshot; this file stays about lasting architecture.**
   migrations in `backend/migrations/`), sessions stored in Postgres
   (`connect-pg-simple`), `node-cron` for scheduled jobs.
 - **Frontend**: React 18 + Vite + Tailwind, in `frontend/`.
-- **LLM**: pluggable via `CLASSIFIER_PROVIDER` (see gotchas below) — Gemini, Groq,
-  or DeepSeek, all serialized through a single app-wide queue
-  (`backend/src/services/llmQueue.js`) to respect provider rate limits.
+- **LLM**: Gemini 3.5 Flash-Lite only (`backend/src/services/classifier.js`,
+  `services/llm.js`) — DeepSeek/Groq/Ollama support was deliberately removed, not
+  just switched off. Calls are serialized through `services/llmQueue.js` (rate
+  limits) and gated by `services/llmBudget.js`, a hard monthly USD spend cap
+  persisted in Postgres (survives restarts/redeploys) that every classifier and
+  thread-summary/reply-suggestion call checks before calling out.
 
 ## Repo layout
 
@@ -119,11 +122,20 @@ See `backend/.env.example` for the full list. Key groups: `DATABASE_URL`
   DeepSeek as the classifier. Neither is current — there's a full React frontend,
   and the classifier provider has moved on (see below). Don't trust that file for
   current setup steps; this file supersedes it.
-- **`CLASSIFIER_PROVIDER` is inconsistent between files.** `backend/.env.example`
-  defaults to `gemini` (documented as the current free-tier choice); `render.yaml`
-  (the actual prod deploy config) sets `groq`. Check which one is actually live
-  before changing classifier behavior — don't assume `.env.example`'s default
-  matches production.
+- **Gemini is the only classifier provider** as of the `llmBudget.js` migration —
+  `backend/.env.example` and `render.yaml` both set `CLASSIFIER_PROVIDER=gemini`
+  with `GEMINI_CLASSIFY_MODEL=gemini-3.5-flash-lite`; `classifier.js`/`llm.js` no
+  longer contain code paths for any other provider, so changing
+  `CLASSIFIER_PROVIDER` to anything else does nothing. A hard monthly spend cap
+  (`LLM_MONTHLY_CAP_USD`, default 10) is enforced in `services/llmBudget.js` —
+  persisted in a `llm_spend` Postgres table (migration `014_llm_budget.sql`), not
+  in-memory, specifically so it survives Render redeploys. Once the cap is hit for
+  the current UTC month, `assertBudgetAvailable()` throws and the call fails the
+  same way any other classifier error already does (email saved unclassified,
+  picked up later by `reclassifyUnclassified`). For a second layer of protection,
+  use a Gemini API key from a Google AI Studio project with **no billing account
+  attached** — free-tier overages then hard-fail (429) instead of ever costing
+  money, regardless of what the in-app counter says.
 - **`thread_responses` table (migration `001_init.sql`) appears unused.** The
   `/api/dashboard/scores` route does NOT read from it — it computes response times
   ad hoc via SQL by matching threads on normalized subject line + time window.

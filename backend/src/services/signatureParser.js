@@ -193,4 +193,28 @@ function matchRoster(bodyText, roster) {
   return null;
 }
 
-module.exports = { extractSuggestion, extractHandler, matchRoster };
+// Matches a message's own sender display name (e.g. Graph's
+// from.emailAddress.name) against the roster — a structured, always-present
+// signal, unlike scanning body text for a signature (which the ~36%
+// coverage note above exists because of). Real gap this closes: a
+// coordinator replying from their OWN @domain address rather than the
+// shared inbox's literal address has a from-name that identifies them
+// directly, with no image-signature guessing needed. Compares whole words,
+// not a plain substring either direction — "Sineesh" (a short display name)
+// isn't a substring of the roster's fuller "Sineesh S", even though it's
+// obviously the same person.
+function matchRosterByName(fromName, roster) {
+  if (!fromName || !roster?.length) return null;
+  const nameWords = fromName.toLowerCase().split(/\s+/).filter((w) => w.length >= 3);
+  if (nameWords.length === 0) return null;
+  for (const entry of roster) {
+    if (!entry?.name) continue;
+    const rosterWords = entry.name.toLowerCase().split(/\s+/).filter((w) => w.length >= 3);
+    if (nameWords.some((w) => rosterWords.includes(w))) {
+      return { name: entry.name, role: entry.role || null };
+    }
+  }
+  return null;
+}
+
+module.exports = { extractSuggestion, extractHandler, matchRoster, matchRosterByName };

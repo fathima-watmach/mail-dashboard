@@ -36,10 +36,10 @@ This repo was developed on one machine against a **real, live production databas
    `CLASSIFIER_PROVIDER` + its key) should also just be copied as-is unless you
    specifically intend to point at a different database/app registration/LLM
    provider going forward.
-5. If you plan to keep using a local LLM for classification/thread-summaries
-   (`CLASSIFIER_PROVIDER=ollama`), you'll need Ollama installed and the model
-   pulled fresh on the new machine (`ollama pull llama3`, or whatever
-   `OLLAMA_MODEL` is set to) — that's not something a file copy carries over.
+5. Classification is Gemini-only (`CLASSIFIER_PROVIDER=gemini`) — DeepSeek, Groq,
+   and Ollama support were removed. A `GEMINI_API_KEY` and `LLM_MONTHLY_CAP_USD`
+   (hard spend cap, see `AGENTS.md`) should already be set; no local model install
+   is needed on a new machine.
 
 ## Local setup
 

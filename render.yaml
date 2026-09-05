@@ -3,7 +3,7 @@ services:
     name: watmach-mail-dashboard
     runtime: node
     rootDir: backend
-    buildCommand: cd ../frontend && npm install && npm run build && cd ../backend && npm install
+    buildCommand: npm install
     startCommand: node src/server.js
     envVars:
       - key: NODE_ENV
@@ -27,13 +27,15 @@ services:
       - key: ZOHO_REDIRECT_URI
         sync: false
       - key: CLASSIFIER_PROVIDER
-        value: groq
-      - key: GROQ_API_KEY
+        value: gemini
+      - key: GEMINI_API_KEY
         sync: false
-      - key: GROQ_MODEL
-        value: llama-3.1-8b-instant
-      - key: GROQ_CLASSIFY_MODEL
-        value: llama-3.1-8b-instant
+      - key: GEMINI_MODEL
+        value: gemini-3.5-flash-lite
+      - key: GEMINI_CLASSIFY_MODEL
+        value: gemini-3.5-flash-lite
+      - key: LLM_MONTHLY_CAP_USD
+        value: 10
       - key: SESSION_SECRET
         generateValue: true
       - key: TOKEN_ENCRYPTION_KEY

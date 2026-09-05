@@ -22,10 +22,26 @@ async function getVisibleMailboxOwnerIds(personId) {
   if (permissionKeys.includes("view_all_departments")) {
     // Scoped to the viewer's OWN client — multiple clients can share this
     // deployment, and "see everything" must not leak across that boundary.
+    // Includes shared/delegated inboxes (is_shared_inbox = true) whose
+    // delegate is connected — a shared inbox never logs in itself, so it can
+    // never satisfy ms_graph_connected/zoho_connected on its own (same gap
+    // ingest.js's ingestAll() had, fixed the same way here).
+    //
+    // include_own_mailbox=false excludes a person's OWN mailbox from this
+    // pool (e.g. a CEO/admin login whose personal inbox isn't an operational
+    // triage mailbox — real case: admin@sariahfm.com) without affecting
+    // their usability as a shared-inbox DELEGATE, which is why the shared-
+    // inbox OR-branch below checks only d.ms_graph_connected/d.zoho_connected,
+    // never d.include_own_mailbox.
     const { rows: allMailboxes } = await pool.query(
-      `SELECT id FROM people
-       WHERE (ms_graph_connected = true OR zoho_connected = true)
-         AND client_id = (SELECT client_id FROM people WHERE id = $1)`,
+      `SELECT p.id
+       FROM people p
+       LEFT JOIN people d ON p.delegate_via_person_id = d.id
+       WHERE p.client_id = (SELECT client_id FROM people WHERE id = $1)
+         AND (
+           (p.include_own_mailbox = true AND (p.ms_graph_connected = true OR p.zoho_connected = true))
+           OR (p.is_shared_inbox = true AND (d.ms_graph_connected = true OR d.zoho_connected = true))
+         )`,
       [personId]
     );
     return allMailboxes.map((r) => r.id);
@@ -34,4 +50,14 @@ async function getVisibleMailboxOwnerIds(personId) {
   return [personId];
 }
 
-module.exports = { getVisibleMailboxOwnerIds };
+// Resolves the logged-in person's own client_id — needed anywhere that reads
+// or writes client-scoped data OUTSIDE the emails table (contact_mappings/
+// domain_mappings notably had no client scoping at all until this was added;
+// see migration 022_contact_client_scope.sql), where req.visibleMailboxIds
+// isn't the right filter since those tables aren't keyed by mailbox.
+async function getClientId(personId) {
+  const { rows } = await pool.query(`SELECT client_id FROM people WHERE id = $1`, [personId]);
+  return rows[0]?.client_id ?? null;
+}
+
+module.exports = { getVisibleMailboxOwnerIds, getClientId };

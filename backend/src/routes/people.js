@@ -13,20 +13,27 @@ router.get("/discover", async (req, res) => {
   const { rows } = await pool.query(`
     WITH raw_emails AS (
       SELECT LOWER(TRIM(from_email)) AS email FROM emails
-        WHERE from_email IS NOT NULL AND from_email != ''
+        WHERE from_email IS NOT NULL AND from_email != '' AND mailbox_owner_id = ANY($1::int[])
       UNION
       SELECT LOWER(TRIM(e)) FROM emails,
         UNNEST(STRING_TO_ARRAY(to_recipients, ',')) AS e
-        WHERE to_recipients IS NOT NULL AND to_recipients != ''
+        WHERE to_recipients IS NOT NULL AND to_recipients != '' AND mailbox_owner_id = ANY($1::int[])
       UNION
       SELECT LOWER(TRIM(e)) FROM emails,
         UNNEST(STRING_TO_ARRAY(cc_recipients, ',')) AS e
-        WHERE cc_recipients IS NOT NULL AND cc_recipients != ''
+        WHERE cc_recipients IS NOT NULL AND cc_recipients != '' AND mailbox_owner_id = ANY($1::int[])
       UNION
+      -- Scanning free-text body content also catches MIME Content-IDs for
+      -- inline images/attachments (e.g. "image001.png@01D839F9.EB...", the
+      -- standard format Outlook/browsers generate) — these coincidentally
+      -- match an email-address shape but are never real addresses. Excluded
+      -- by rejecting any match whose local part ends in a common attachment
+      -- extension, which a real email local-part never does.
       SELECT LOWER(m[1]) FROM emails
         CROSS JOIN LATERAL
           REGEXP_MATCHES(body_preview, '[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}', 'g') AS m
-        WHERE body_preview IS NOT NULL
+        WHERE body_preview IS NOT NULL AND mailbox_owner_id = ANY($1::int[])
+          AND m[1] !~* '\\.(png|jpe?g|gif|bmp|webp|svg|pdf|docx?|xlsx?|zip)@'
     ),
     unique_emails AS (
       SELECT DISTINCT email FROM raw_emails
@@ -43,10 +50,10 @@ router.get("/discover", async (req, res) => {
       dm.label     AS domain_label,
       dm.type      AS domain_type
     FROM unique_emails ue
-    LEFT JOIN contact_mappings cm ON cm.email = ue.email
-    LEFT JOIN domain_mappings  dm ON dm.domain = SPLIT_PART(ue.email, '@', 2)
+    LEFT JOIN contact_mappings cm ON cm.email = ue.email AND cm.client_id = $2
+    LEFT JOIN domain_mappings  dm ON dm.domain = SPLIT_PART(ue.email, '@', 2) AND dm.client_id = $2
     ORDER BY SPLIT_PART(ue.email, '@', 2), ue.email
-  `);
+  `, [req.visibleMailboxIds, req.clientId]);
 
   // Group by domain
   const domainMap = {};
@@ -73,13 +80,19 @@ router.get("/discover", async (req, res) => {
   res.json({ domains: Object.values(domainMap) });
 });
 
-// Flat list of all mapped contacts (for CC autocomplete)
+// Flat list of all mapped contacts (for CC autocomplete) — scoped to the
+// viewer's own client. Was unscoped entirely (real bug: a Sariah user's CC
+// autocomplete was surfacing a different client's own-company staff, the
+// only rows that existed in this table at the time — see migration
+// 022_contact_client_scope.sql).
 router.get("/contacts", async (req, res) => {
   const { rows } = await pool.query(
     `SELECT cm.email, cm.display_name, cm.department, cm.role_label, dm.label as company, dm.type as org_type
      FROM contact_mappings cm
-     LEFT JOIN domain_mappings dm ON dm.domain = cm.domain
-     ORDER BY cm.display_name NULLS LAST`
+     LEFT JOIN domain_mappings dm ON dm.domain = cm.domain AND dm.client_id = cm.client_id
+     WHERE cm.client_id = $1
+     ORDER BY cm.display_name NULLS LAST`,
+    [req.clientId]
   );
   res.json({ contacts: rows });
 });
@@ -140,7 +153,8 @@ router.get("/suggest", async (req, res) => {
   res.json({ suggestion });
 });
 
-// Upsert a domain mapping
+// Upsert a domain mapping — scoped to the viewer's own client so two clients
+// can independently map the same external domain without colliding.
 router.post("/domains", async (req, res) => {
   const { domain, label, type, notes } = req.body;
   if (!domain || !label || !type) {
@@ -148,40 +162,41 @@ router.post("/domains", async (req, res) => {
   }
 
   const { rows } = await pool.query(
-    `INSERT INTO domain_mappings (domain, label, type, notes)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (domain) DO UPDATE
+    `INSERT INTO domain_mappings (domain, label, type, notes, client_id)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (client_id, domain) DO UPDATE
        SET label=$2, type=$3, notes=$4, updated_at=now()
      RETURNING *`,
-    [domain.toLowerCase(), label, type, notes || null]
+    [domain.toLowerCase(), label, type, notes || null, req.clientId]
   );
   res.json({ domain: rows[0] });
 });
 
 router.delete("/domains/:id", async (req, res) => {
-  await pool.query("DELETE FROM domain_mappings WHERE id=$1", [req.params.id]);
+  await pool.query("DELETE FROM domain_mappings WHERE id=$1 AND client_id=$2", [req.params.id, req.clientId]);
   res.json({ ok: true });
 });
 
-// Upsert a contact mapping
+// Upsert a contact mapping — scoped to the viewer's own client, same
+// reasoning as /domains above.
 router.post("/contacts", async (req, res) => {
   const { email, display_name, department, role_label, notes } = req.body;
   if (!email) return res.status(400).json({ error: "email is required" });
 
   const domain = email.split("@")[1]?.toLowerCase() || "";
   const { rows } = await pool.query(
-    `INSERT INTO contact_mappings (email, display_name, domain, department, role_label, notes)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     ON CONFLICT (email) DO UPDATE
+    `INSERT INTO contact_mappings (email, display_name, domain, department, role_label, notes, client_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT (client_id, email) DO UPDATE
        SET display_name=$2, domain=$3, department=$4, role_label=$5, notes=$6, updated_at=now()
      RETURNING *`,
-    [email.toLowerCase(), display_name || null, domain, department || null, role_label || null, notes || null]
+    [email.toLowerCase(), display_name || null, domain, department || null, role_label || null, notes || null, req.clientId]
   );
   res.json({ contact: rows[0] });
 });
 
 router.delete("/contacts/:id", async (req, res) => {
-  await pool.query("DELETE FROM contact_mappings WHERE id=$1", [req.params.id]);
+  await pool.query("DELETE FROM contact_mappings WHERE id=$1 AND client_id=$2", [req.params.id, req.clientId]);
   res.json({ ok: true });
 });
 

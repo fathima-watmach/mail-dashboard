@@ -11,6 +11,8 @@ async function fetchThreadSummary(emailId, refresh = false) {
 export default function ThreadSummary({ emailId }) {
   const [state, setState] = useState("idle"); // idle | loading | done | error | single
   const [entries, setEntries] = useState([]);
+  const [narrative, setNarrative] = useState(null);
+  const [view, setView] = useState("narrative"); // narrative | timeline
   const [errMsg, setErrMsg] = useState("");
 
   const load = async (e, refresh = false) => {
@@ -20,6 +22,7 @@ export default function ThreadSummary({ emailId }) {
       const data = await fetchThreadSummary(emailId, refresh);
       if (data.entries && data.entries.length > 0) {
         setEntries(data.entries);
+        setNarrative(data.narrative || null);
         setState("done");
       } else {
         setState("single");
@@ -64,9 +67,24 @@ export default function ThreadSummary({ emailId }) {
   }
 
   return (
-    <div className="mt-2 space-y-1.5">
+    <div className="mt-2 space-y-1.5" onClick={e => e.stopPropagation()}>
       <div className="flex items-center justify-between">
-        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Thread timeline</p>
+        <div className="flex items-center gap-1 text-[11px]">
+          {narrative && (
+            <button
+              onClick={() => setView("narrative")}
+              className={`px-2 py-0.5 rounded-full transition-colors ${view === "narrative" ? "bg-brand-light text-brand font-medium" : "text-gray-400 hover:text-gray-600"}`}
+            >
+              Summary
+            </button>
+          )}
+          <button
+            onClick={() => setView("timeline")}
+            className={`px-2 py-0.5 rounded-full transition-colors ${view === "timeline" ? "bg-brand-light text-brand font-medium" : "text-gray-400 hover:text-gray-600"}`}
+          >
+            Timeline
+          </button>
+        </div>
         <button
           onClick={e => load(e, true)}
           className="text-[10px] text-gray-300 hover:text-gray-500 transition-colors"
@@ -75,15 +93,20 @@ export default function ThreadSummary({ emailId }) {
           ↺ Refresh
         </button>
       </div>
-      <ol className="relative border-l border-gray-200 ml-2 space-y-2">
-        {entries.map((entry, i) => (
-          <li key={i} className="ml-4">
-            <div className="absolute -left-1.5 w-3 h-3 rounded-full bg-brand-light border border-white" />
-            <p className="text-xs text-gray-400">{entry.date} · <span className="font-medium text-gray-600">{entry.from}</span></p>
-            <p className="text-xs text-gray-700 mt-0.5">{entry.summary}</p>
-          </li>
-        ))}
-      </ol>
+
+      {view === "narrative" && narrative ? (
+        <p className="text-xs text-gray-700 leading-relaxed">{narrative}</p>
+      ) : (
+        <ol className="relative border-l border-gray-200 ml-2 space-y-2">
+          {entries.map((entry, i) => (
+            <li key={i} className="ml-4">
+              <div className="absolute -left-1.5 w-3 h-3 rounded-full bg-brand-light border border-white" />
+              <p className="text-xs text-gray-400">{entry.date} · <span className="font-medium text-gray-600">{entry.from}</span></p>
+              <p className="text-xs text-gray-700 mt-0.5">{entry.summary}</p>
+            </li>
+          ))}
+        </ol>
+      )}
     </div>
   );
 }

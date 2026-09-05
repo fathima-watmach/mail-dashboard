@@ -1,5 +1,6 @@
 import React from "react";
 import watmachLogo from "../assets/watmach-logo.png";
+import { BASE } from "../api";
 
 export default function LoginPage() {
   return (
@@ -22,7 +23,7 @@ export default function LoginPage() {
         <div className="space-y-3">
           {/* Microsoft Outlook */}
           <a
-            href="/auth/login"
+            href={`${BASE}/auth/login`}
             className="flex items-center justify-center gap-3 bg-brand hover:bg-brand-hover text-white px-6 py-3 rounded-lg font-medium transition-colors w-full"
           >
             <svg className="w-5 h-5 flex-shrink-0" viewBox="0 0 23 23" fill="none">
@@ -36,7 +37,7 @@ export default function LoginPage() {
 
           {/* Zoho Mail */}
           <a
-            href="/auth/zoho/login"
+            href={`${BASE}/auth/zoho/login`}
             className="flex items-center justify-center gap-3 bg-navy-muted border border-navy-border text-gray-300 hover:border-brand-muted hover:text-white px-6 py-3 rounded-lg font-medium transition-colors w-full"
           >
             <svg className="w-5 h-5 flex-shrink-0" viewBox="0 0 40 40" fill="none">

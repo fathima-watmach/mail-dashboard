@@ -109,18 +109,48 @@ router.post("/events/:id/respond", async (req, res) => {
 });
 
 // ── Email-based meeting events (for Zoho users or as supplement) ──────────────
-// Scans stored email bodies in date range, extracts meeting mentions via LLM.
-// Results are cached in emails.meeting_date so they're only extracted once.
+// Scans stored email bodies in date range, extracts meeting/deadline mentions
+// via LLM. Results are cached in emails.meeting_date/action_deadline_date so
+// they're only extracted once.
+//
+// As of 2026-09-05, this extraction ALSO happens inline at ingest time
+// (classifier.js — merged in, since it was sending the exact same
+// subject+body to Gemini a second time for no real reason: same content
+// already goes through classification once). Newly-ingested mail already
+// has meeting_details set (to '{}' if nothing found) by the time it reaches
+// this route, so the WHERE clause below naturally skips it — this loop is
+// now effectively a backfill path for mail ingested BEFORE the merge, not
+// the primary extraction mechanism for new mail. Left in place rather than
+// removed since there's still a real backlog of older unscanned emails.
+// Same temporary Sariah pause as ingest.js's SARIAH_CLASSIFICATION_PAUSED_CLIENT_ID
+// (2026-09-05) — this route only ever scans mailbox_owner_id = the logged-in
+// person's own id, which in practice can't reach Sariah's shared inboxes
+// (contactus@/maintenance@ are delegate-accessed, never logged into
+// directly) — but guarding it explicitly here too removes any doubt while
+// classification corrections are in progress. Remove once corrections are
+// done.
+const SARIAH_CLASSIFICATION_PAUSED_CLIENT_ID = 8;
+
 router.get("/email-events", async (req, res) => {
   const { personId } = req.session;
   const { start, end } = req.query;
+
+  const personRow = await pool.query(`SELECT client_id FROM people WHERE id = $1`, [personId]);
+  const skipLlmBackfill = personRow.rows[0]?.client_id === SARIAH_CLASSIFICATION_PAUSED_CLIENT_ID;
 
   const startDT = start || new Date().toISOString().split("T")[0];
   const endDT   = end   || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
 
   // Scan ALL unprocessed emails (not just those in the date range) —
-  // an email received last week may mention a meeting scheduled for next month
-  const { rows: unchecked } = await pool.query(
+  // an email received last week may mention a meeting scheduled for next month.
+  // `meeting_details IS NULL` is the "not yet extracted" sentinel for BOTH
+  // meeting and deadline detection (one LLM call does both, see prompt below)
+  // — kept as the existing column rather than adding a second gate column.
+  // Skips this backfill entirely while Sariah classification is paused
+  // (skipLlmBackfill) — the SELECT further down still runs and returns
+  // whatever meeting/deadline data already exists, so this only holds off
+  // the LLM calls, not real calendar data already on record.
+  const { rows: unchecked } = skipLlmBackfill ? { rows: [] } : await pool.query(
     `SELECT id, subject, from_name, from_email, body_preview, received_at
      FROM emails
      WHERE mailbox_owner_id = $1
@@ -130,51 +160,72 @@ router.get("/email-events", async (req, res) => {
     [personId]
   );
 
-  // Extract meetings from unchecked emails
+  // Extract meetings AND action deadlines from unchecked emails in one pass.
+  // A "deadline" here is deliberately NOT a meeting — no one attends/joins it,
+  // it's just a date something is due (send a document, pay an invoice,
+  // respond, renew) — the same real-world signal the client's own MoM
+  // keyword list (urgent attention/reminder-1-day/EOD today/renewal/
+  // tomorrow/etc — see classifier.js) points at for severity, just surfaced
+  // here as a literal calendar date instead of a badge.
   for (const email of unchecked) {
     try {
-      const prompt = `Read this email and determine if it mentions a specific scheduled meeting, call, visit, or appointment with an explicit date.
-If yes, extract: date (ISO format YYYY-MM-DD), time (e.g. "3:00 PM IST" or null), title (brief description), participants (array of names/emails mentioned).
-If no meeting is mentioned, return {"has_meeting": false}.
-Return ONLY JSON, no markdown.
+      const prompt = `Read this email and determine two separate things:
+1. Does it mention a specific scheduled MEETING, call, visit, or appointment — something both parties attend/join at a set time?
+2. Does it mention an ACTION DEADLINE — a date by which something must be sent, completed, paid, renewed, or responded to (NOT a meeting; e.g. "please send by Friday", "renewal due 15th", "reminder - 1 day", "EOD today")?
+
+An email can have neither, either, or both. If a date is mentioned but it's vague/not a specific date (e.g. "soon", "ASAP" with no date), do not extract it.
+
+Respond with ONLY this JSON shape, no markdown:
+{"has_meeting":true/false,"meeting":{"date":"YYYY-MM-DD","time":"3:00 PM IST or null","title":"...","participants":["..."]} or null,
+ "has_deadline":true/false,"deadline":{"date":"YYYY-MM-DD","title":"brief description","action":"one short sentence of what's due"} or null}
 
 Email subject: ${email.subject}
 Email body: ${(email.body_preview || "").slice(0, 2000)}
 
 JSON:`;
 
-      const raw = await callLLM(prompt, { maxTokens: 300 });
+      const raw = await callLLM(prompt, { maxTokens: 350 });
       let parsed;
-      try { parsed = extractJson(raw); } catch (_) { parsed = { has_meeting: false }; }
+      try { parsed = extractJson(raw); } catch (_) { parsed = { has_meeting: false, has_deadline: false }; }
 
-      if (parsed.has_meeting === false || !parsed.date) {
-        // Mark as checked with empty result so we don't re-process
-        await pool.query(
-          `UPDATE emails SET meeting_details = '{}' WHERE id = $1`, [email.id]
-        );
-      } else {
-        await pool.query(
-          `UPDATE emails SET
-             meeting_date    = $1,
-             meeting_time    = $2,
-             meeting_title   = $3,
-             meeting_details = $4
-           WHERE id = $5`,
-          [parsed.date, parsed.time || null, parsed.title || email.subject, JSON.stringify(parsed), email.id]
-        );
-      }
+      const meeting = parsed.has_meeting && parsed.meeting?.date ? parsed.meeting : null;
+      const deadline = parsed.has_deadline && parsed.deadline?.date ? parsed.deadline : null;
+
+      await pool.query(
+        `UPDATE emails SET
+           meeting_date            = $1,
+           meeting_time            = $2,
+           meeting_title           = $3,
+           meeting_details         = $4,
+           action_deadline_date    = $5,
+           action_deadline_title   = $6,
+           action_deadline_details = $7
+         WHERE id = $8`,
+        [
+          meeting?.date || null, meeting?.time || null, meeting?.title || (meeting ? email.subject : null),
+          JSON.stringify(meeting || {}),
+          deadline?.date || null, deadline?.title || (deadline ? email.subject : null),
+          deadline ? JSON.stringify(deadline) : null,
+          email.id,
+        ]
+      );
     } catch (_) { /* skip on error */ }
   }
 
-  // Return all emails with extracted meetings in range
+  // Return all emails with an extracted meeting OR deadline in range —
+  // frontend splits each row into a meeting entry, a deadline entry, or
+  // both depending on which date fields are populated.
   const { rows: meetings } = await pool.query(
     `SELECT id, subject, from_name, from_email, received_at,
-            meeting_date, meeting_time, meeting_title, meeting_details
+            meeting_date, meeting_time, meeting_title, meeting_details,
+            action_deadline_date, action_deadline_title, action_deadline_details
      FROM emails
      WHERE mailbox_owner_id = $1
-       AND meeting_date IS NOT NULL
-       AND meeting_date >= $2 AND meeting_date <= $3
-     ORDER BY meeting_date, meeting_time`,
+       AND (
+         (meeting_date IS NOT NULL AND meeting_date >= $2 AND meeting_date <= $3)
+         OR (action_deadline_date IS NOT NULL AND action_deadline_date >= $2 AND action_deadline_date <= $3)
+       )
+     ORDER BY COALESCE(meeting_date, action_deadline_date), meeting_time`,
     [personId, startDT, endDT]
   );
 

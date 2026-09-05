@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useRef } from "react";
+import { BASE } from "../api";
 
 async function fetchContacts() {
-  const res = await fetch("/api/people/contacts", { credentials: "include" });
+  const res = await fetch(`${BASE}/api/people/contacts`, { credentials: "include" });
   const d = await res.json();
   return d.contacts || [];
 }
 
 async function sendReply(emailId, { text, replyAll, cc }) {
-  const res = await fetch(`/api/dashboard/emails/${emailId}/reply`, {
+  const res = await fetch(`${BASE}/api/dashboard/emails/${emailId}/reply`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
@@ -17,7 +18,13 @@ async function sendReply(emailId, { text, replyAll, cc }) {
 }
 
 // ── CC Tag Input ──────────────────────────────────────────────────────────────
-function CcInput({ value, onChange }) {
+// Suggestions come from two sources: people already ON THIS THREAD (its own
+// To/Cc/From — the most likely people you'd want to loop in, e.g. someone
+// who was in the original To list) and the saved contacts registry. A real
+// thread participant not being in the saved-contacts table is common and
+// expected (that table is a separate, manually-curated list) — thread
+// participants are shown first regardless of whether they're saved anywhere.
+function CcInput({ value, onChange, threadParticipants = [] }) {
   const [input, setInput] = useState("");
   const [contacts, setContacts] = useState([]);
   const [open, setOpen] = useState(false);
@@ -27,14 +34,20 @@ function CcInput({ value, onChange }) {
     fetchContacts().then(setContacts).catch(() => {});
   }, []);
 
-  const filtered = input.length > 0
-    ? contacts
-        .filter((c) =>
-          c.email.includes(input.toLowerCase()) ||
-          (c.display_name || "").toLowerCase().includes(input.toLowerCase())
-        )
-        .slice(0, 6)
-    : [];
+  const filtered = React.useMemo(() => {
+    if (input.length === 0) return [];
+    const q = input.toLowerCase();
+    const already = new Set(value.map((c) => c.email));
+    const fromThread = threadParticipants
+      .filter((c) => !already.has(c.email) && (c.email.includes(q) || (c.name || "").toLowerCase().includes(q)))
+      .map((c) => ({ email: c.email, name: c.name, source: "thread" }));
+    const threadEmails = new Set(fromThread.map((c) => c.email));
+    const fromContacts = contacts
+      .filter((c) => !already.has(c.email) && !threadEmails.has(c.email) &&
+        (c.email.includes(q) || (c.display_name || "").toLowerCase().includes(q)))
+      .map((c) => ({ email: c.email, name: c.display_name || c.email, company: c.company, source: "contact" }));
+    return [...fromThread, ...fromContacts].slice(0, 6);
+  }, [input, contacts, threadParticipants, value]);
 
   const add = (email, name) => {
     if (!value.find((c) => c.email === email)) {
@@ -67,7 +80,7 @@ function CcInput({ value, onChange }) {
           value={input}
           onChange={(e) => { setInput(e.target.value); setOpen(true); }}
           onKeyDown={(e) => {
-            if (e.key === "Enter") { e.preventDefault(); filtered.length ? add(filtered[0].email, filtered[0].display_name) : addFromInput(); }
+            if (e.key === "Enter") { e.preventDefault(); filtered.length ? add(filtered[0].email, filtered[0].name) : addFromInput(); }
             if (e.key === "," || e.key === " ") { e.preventDefault(); addFromInput(); }
             if (e.key === "Backspace" && !input && value.length) remove(value[value.length - 1].email);
           }}
@@ -83,12 +96,15 @@ function CcInput({ value, onChange }) {
             <button
               key={c.email}
               type="button"
-              onMouseDown={(e) => { e.preventDefault(); add(c.email, c.display_name); }}
+              onMouseDown={(e) => { e.preventDefault(); add(c.email, c.name); }}
               className="w-full text-left px-3 py-2 text-xs hover:bg-brand-light flex items-center gap-2"
             >
               <div>
-                <p className="font-medium text-gray-800">{c.display_name || c.email}</p>
-                <p className="text-gray-400">{c.email}{c.company ? ` · ${c.company}` : ""}</p>
+                <p className="font-medium text-gray-800">{c.name || c.email}</p>
+                <p className="text-gray-400">
+                  {c.email}
+                  {c.source === "thread" ? " · On this thread" : c.company ? ` · ${c.company}` : ""}
+                </p>
               </div>
             </button>
           ))}
@@ -99,7 +115,7 @@ function CcInput({ value, onChange }) {
 }
 
 // ── Main ReplyCompose ─────────────────────────────────────────────────────────
-export default function ReplyCompose({ email, onSent, onCancel, initialText = "" }) {
+export default function ReplyCompose({ email, onSent, onCancel, initialText = "", currentUserEmail }) {
   const [mode, setMode] = useState("reply");      // reply | replyAll
   const [text, setText] = useState(initialText);
   const [cc, setCc] = useState([]);
@@ -129,6 +145,32 @@ export default function ReplyCompose({ email, onSent, onCancel, initialText = ""
     });
   }, [mode, email]);
 
+  // Everyone actually on this thread (From + To + Cc) — CcInput's suggestions
+  // pool. mohammad.samir@... being in the original To list but missing from
+  // the saved-contacts registry was exactly the reported bug: a real thread
+  // participant should always be one click away regardless of whether
+  // they're separately saved somewhere.
+  const threadParticipants = React.useMemo(() => {
+    const parse = (str) =>
+      (str || "")
+        .split(",")
+        .map((s) => s.trim().toLowerCase())
+        .filter((s) => s && s !== "not provided")
+        .map((e) => ({ email: e, name: e }));
+
+    const all = [
+      { email: (email.from_email || "").toLowerCase(), name: email.from_name || email.from_email },
+      ...parse(email.to_recipients),
+      ...parse(email.cc_recipients),
+    ];
+    const seen = new Set();
+    return all.filter((r) => {
+      if (!r.email || seen.has(r.email)) return false;
+      seen.add(r.email);
+      return true;
+    });
+  }, [email]);
+
   const handleSend = async () => {
     if (!text.trim()) return;
     setStatus("sending");
@@ -151,6 +193,15 @@ export default function ReplyCompose({ email, onSent, onCancel, initialText = ""
       className="p-3 bg-brand-light border border-brand-light rounded-lg space-y-2"
       onClick={(e) => e.stopPropagation()}
     >
+      {/* Sent from the logged-in user's own mailbox — never "as" the mailbox
+          the original email arrived in (see AGENTS.md: shared inboxes stay
+          read-only by client agreement; this is a fresh message referencing
+          the thread, not an in-place send-as). Surfaced here so it's clear
+          before hitting Send. */}
+      {currentUserEmail && (
+        <p className="text-[11px] text-gray-400 px-0.5">Sending as <span className="font-medium text-gray-600">{currentUserEmail}</span></p>
+      )}
+
       {/* Original email context */}
       <div className="bg-white border border-brand-light rounded-lg px-3 py-2 text-xs text-gray-500 space-y-0.5">
         <p><span className="font-medium text-gray-700 w-6 inline-block">From</span> {email.from_name ? `${email.from_name} <${email.from_email}>` : email.from_email}</p>
@@ -190,7 +241,7 @@ export default function ReplyCompose({ email, onSent, onCancel, initialText = ""
       <div className="flex items-start gap-2">
         <span className="text-xs text-gray-400 pt-1 flex-shrink-0 w-5">Cc</span>
         <div className="flex-1">
-          <CcInput value={cc} onChange={setCc} />
+          <CcInput value={cc} onChange={setCc} threadParticipants={threadParticipants} />
         </div>
       </div>
 

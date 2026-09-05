@@ -1,4 +1,4 @@
-const { getVisibleMailboxOwnerIds } = require("../services/visibility");
+const { getVisibleMailboxOwnerIds, getClientId } = require("../services/visibility");
 
 function requireLogin(req, res, next) {
   if (!req.session || !req.session.personId) {
@@ -11,11 +11,19 @@ function requireLogin(req, res, next) {
  * Resolves which mailboxes the logged-in person can see and attaches them as
  * req.visibleMailboxIds, so routes can pool data across every mailbox an admin
  * is entitled to (their own + any delegated shared inboxes) instead of always
- * filtering to just their own session.personId.
+ * filtering to just their own session.personId. Also attaches req.clientId,
+ * for routes touching client-scoped tables that aren't keyed by mailbox
+ * (contact_mappings/domain_mappings) — req.visibleMailboxIds isn't the right
+ * filter there.
  */
 async function attachVisibility(req, res, next) {
   try {
-    req.visibleMailboxIds = await getVisibleMailboxOwnerIds(req.session.personId);
+    const [visibleMailboxIds, clientId] = await Promise.all([
+      getVisibleMailboxOwnerIds(req.session.personId),
+      getClientId(req.session.personId),
+    ]);
+    req.visibleMailboxIds = visibleMailboxIds;
+    req.clientId = clientId;
     next();
   } catch (err) {
     next(err);

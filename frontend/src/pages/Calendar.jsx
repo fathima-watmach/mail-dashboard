@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback, useMemo } from "react";
+import { BASE } from "../api";
 
 // ── Date helpers ──────────────────────────────────────────────────────────────
 function startOfWeek(date) {
@@ -44,13 +45,13 @@ function eventDateKey(dtStr) { return dtStr.split("T")[0]; }
 
 // ── API ───────────────────────────────────────────────────────────────────────
 const fetchGraphEvents = (start, end) =>
-  fetch(`/api/calendar/events?start=${start}&end=${end}`, { credentials: "include" }).then(r => r.json());
+  fetch(`${BASE}/api/calendar/events?start=${start}&end=${end}`, { credentials: "include" }).then(r => r.json());
 
 const fetchEmailEvents = (start, end) =>
-  fetch(`/api/calendar/email-events?start=${start}&end=${end}`, { credentials: "include" }).then(r => r.json());
+  fetch(`${BASE}/api/calendar/email-events?start=${start}&end=${end}`, { credentials: "include" }).then(r => r.json());
 
 const respondToEvent = (id, action) =>
-  fetch(`/api/calendar/events/${id}/respond`, {
+  fetch(`${BASE}/api/calendar/events/${id}/respond`, {
     method: "POST", credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ action }),
@@ -91,6 +92,28 @@ function EmailMeetingCard({ event }) {
             <p><span className="font-medium">Participants:</span> {details.participants.join(", ")}</p>
           )}
           {details.notes && <p className="italic">{details.notes}</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Action deadline card ──────────────────────────────────────────────────────
+// A date something is DUE (send/pay/renew/respond by), not a meeting anyone
+// attends — see calendar.js's /email-events. Amber, not purple, to read as
+// "action owed" rather than "event", and distinct from EmailMeetingCard.
+function ActionDeadlineCard({ event }) {
+  const [expanded, setExpanded] = useState(false);
+  const details = event.action_deadline_details || {};
+  return (
+    <div className="mb-1 rounded-lg border border-amber-200 bg-amber-50 p-2 cursor-pointer text-xs"
+      onClick={() => setExpanded(x => !x)}>
+      <p className="font-medium text-amber-800 truncate">🚩 {event.action_deadline_title || event.subject}</p>
+      {details.action && <p className="text-amber-600 mt-0.5 truncate">{details.action}</p>}
+      {expanded && (
+        <div className="mt-1.5 pt-1.5 border-t border-amber-200 space-y-0.5 text-amber-700">
+          <p><span className="font-medium">From:</span> {event.from_name || event.from_email}</p>
+          <p className="italic text-amber-600">Due date extracted from this email — via email</p>
         </div>
       )}
     </div>
@@ -235,9 +258,18 @@ export default function Calendar({ user }) {
       map[key].push({ ...evt, _type: "calendar" });
     }
     for (const m of emailEvents) {
-      const key = m.meeting_date;
-      if (!map[key]) map[key] = [];
-      map[key].push({ ...m, _type: "email", id: `email-${m.id}`, subject: m.meeting_title || m.subject });
+      // A single email row can carry a meeting date, a deadline date, or
+      // both — each becomes its own entry on its own day.
+      if (m.meeting_date) {
+        const key = m.meeting_date;
+        if (!map[key]) map[key] = [];
+        map[key].push({ ...m, _type: "email", id: `email-${m.id}`, subject: m.meeting_title || m.subject });
+      }
+      if (m.action_deadline_date) {
+        const key = m.action_deadline_date;
+        if (!map[key]) map[key] = [];
+        map[key].push({ ...m, _type: "deadline", id: `deadline-${m.id}`, subject: m.action_deadline_title || m.subject });
+      }
     }
     return map;
   }, [events, emailEvents]);
@@ -362,7 +394,9 @@ function DayView({ dateStr, dayEvents, onRefresh }) {
         ) : (
           <div className="space-y-2">
             {dayEvents.map(evt =>
-              evt._type === "email"
+              evt._type === "deadline"
+                ? <ActionDeadlineCard key={evt.id} event={evt} />
+                : evt._type === "email"
                 ? <EmailMeetingCard key={evt.id} event={evt} />
                 : <EventCard key={evt.id} event={evt} onRefresh={onRefresh} />
             )}
@@ -386,6 +420,7 @@ function WeekView({ weekStart, byDay, onRefresh, onDayClick }) {
           { color: "bg-red-100 border-red-300", label: "Declined" },
           { color: "bg-purple-50 border-purple-300", label: "You organised" },
           { color: "bg-purple-100 border-purple-200", label: "Via email" },
+          { color: "bg-amber-50 border-amber-200", label: "Action due" },
         ].map(l => (
           <span key={l.label} className="flex items-center gap-1">
             <span className={`w-3 h-3 rounded border ${l.color} inline-block`} /> {l.label}
@@ -409,7 +444,9 @@ function WeekView({ weekStart, byDay, onRefresh, onDayClick }) {
               {dayEvents.length === 0
                 ? <div className="h-20 rounded-lg border border-dashed border-gray-100" />
                 : dayEvents.map(evt =>
-                    evt._type === "email"
+                    evt._type === "deadline"
+                      ? <ActionDeadlineCard key={evt.id} event={evt} />
+                      : evt._type === "email"
                       ? <EmailMeetingCard key={evt.id} event={evt} />
                       : <EventCard key={evt.id} event={evt} onRefresh={onRefresh} />
                   )
@@ -449,8 +486,9 @@ function MonthView({ anchor, byDay, onDayClick }) {
           const inMonth = day.getMonth() === anchor.getMonth();
           const isToday = key === today;
           const count   = (byDay[key] || []).length;
-          const hasEmail   = (byDay[key] || []).some(e => e._type === "email");
+          const hasEmail    = (byDay[key] || []).some(e => e._type === "email");
           const hasCalendar = (byDay[key] || []).some(e => e._type === "calendar");
+          const hasDeadline = (byDay[key] || []).some(e => e._type === "deadline");
 
           return (
             <div
@@ -473,6 +511,11 @@ function MonthView({ anchor, byDay, onDayClick }) {
                   {hasEmail && (
                     <div className="text-[10px] bg-purple-50 text-purple-700 rounded px-1.5 py-0.5 truncate font-medium">
                       {(byDay[key] || []).filter(e => e._type === "email").length} via email
+                    </div>
+                  )}
+                  {hasDeadline && (
+                    <div className="text-[10px] bg-amber-50 text-amber-700 rounded px-1.5 py-0.5 truncate font-medium">
+                      🚩 {(byDay[key] || []).filter(e => e._type === "deadline").length} due
                     </div>
                   )}
                 </div>

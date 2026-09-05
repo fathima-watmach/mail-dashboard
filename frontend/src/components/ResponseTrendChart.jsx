@@ -7,7 +7,7 @@ function formatWeek(iso) {
   return d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
 }
 
-export default function ResponseTrendChart({ weeks }) {
+export default function ResponseTrendChart({ weeks, unitLabel = "Week of" }) {
   const points = weeks.filter((w) => w.avgHours != null);
   if (!points.length) {
     return <p className="text-sm text-gray-400 text-center py-8">Not enough thread activity in this range to compute a trend.</p>;
@@ -39,9 +39,12 @@ export default function ResponseTrendChart({ weeks }) {
       <line x1={pad} y1={height - pad} x2={width - pad} y2={height - pad} stroke="#e5e7eb" strokeWidth="1" />
       <path d={area} fill="url(#respGrad)" />
       <path d={path} fill="none" stroke={COLOR} strokeWidth="2" />
+      {/* Y-axis: hours to first reply — min/max labels since the curve is otherwise unitless */}
+      <text x={pad} y={pad - 6} textAnchor="start" fontSize="9" fill="#9ca3af">{max}h</text>
+      <text x={pad} y={height - pad + 10} textAnchor="start" fontSize="9" fill="#9ca3af">{min}h</text>
       {coords.map((p) => (
         <circle key={p.week} cx={p.x} cy={p.y} r="3.5" fill="#fff" stroke={COLOR} strokeWidth="2">
-          <title>{`Week of ${formatWeek(p.week)}: ${p.avgHours}h avg first response`}</title>
+          <title>{`${unitLabel} ${formatWeek(p.week)}: ${p.avgHours}h avg first response`}</title>
         </circle>
       ))}
       {coords.map((p, i) => (i % Math.max(1, Math.ceil(coords.length / 6)) === 0) && (

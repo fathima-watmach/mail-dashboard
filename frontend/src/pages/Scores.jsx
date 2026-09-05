@@ -1,44 +1,6 @@
 import React, { useEffect, useState } from "react";
-
-function pct(n, total) {
-  if (!total) return 0;
-  return Math.round((Number(n) / Number(total)) * 100);
-}
-
-function RateBar({ value, total, color = "bg-brand" }) {
-  const p = pct(value, total);
-  return (
-    <div className="flex items-center gap-2">
-      <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-        <div className={`h-full rounded-full ${color}`} style={{ width: `${p}%` }} />
-      </div>
-      <span className="text-xs text-gray-500 w-8 text-right">{p}%</span>
-    </div>
-  );
-}
-
-function Badge({ value, color }) {
-  if (!Number(value)) return <span className="text-gray-300 text-xs">—</span>;
-  return <span className={`text-xs font-semibold ${color}`}>{value}</span>;
-}
-
-function PendingTime({ hours }) {
-  if (!hours) return <span className="text-gray-300 text-xs">—</span>;
-  const h = Number(hours);
-  if (h >= 48) {
-    const days = Math.round(h / 24);
-    return <span className="text-xs font-semibold text-red-500">{days}d waiting</span>;
-  }
-  if (h >= 24) return <span className="text-xs font-semibold text-orange-500">{Math.round(h)}h waiting</span>;
-  return <span className="text-xs font-semibold text-amber-500">{Math.round(h)}h waiting</span>;
-}
-
-function ResponseTime({ hours }) {
-  if (hours == null) return <span className="text-gray-300 text-xs">—</span>;
-  const h = Number(hours);
-  const color = h <= 4 ? "text-green-600" : h <= 24 ? "text-amber-600" : "text-red-500";
-  return <span className={`text-xs font-semibold ${color}`}>{h < 1 ? "<1h" : `${h}h`}</span>;
-}
+import { pct, RateBar, Badge, PendingTime, ResponseTime } from "../components/shared";
+import { BASE } from "../api";
 
 export default function Scores() {
   const [data, setData]     = useState(null);
@@ -46,9 +8,16 @@ export default function Scores() {
   const [view, setView]     = useState("sender");
 
   useEffect(() => {
-    fetch("/api/dashboard/scores", { credentials: "include" })
+    fetch(`${BASE}/api/dashboard/scores`, { credentials: "include" })
       .then((r) => r.json())
-      .then(setData)
+      .then((d) => {
+        setData(d);
+        // Coordinator scores (shared-inbox staff identified by signature) are
+        // the primary Phase 1 view when they exist — default straight to it
+        // instead of the domain-based sender view, which is mostly empty for
+        // a shared-inbox-only client.
+        if (d.coordinators?.length > 0) setView("coordinator");
+      })
       .catch(console.error)
       .finally(() => setLoading(false));
   }, []);
@@ -61,9 +30,11 @@ export default function Scores() {
     );
   }
 
-  const depts   = data?.departments || [];
-  const senders = data?.senders     || [];
-  const domain  = data?.domain      || "your domain";
+  const depts        = data?.departments  || [];
+  const senders      = data?.senders      || [];
+  const coordinators = data?.coordinators || [];
+  const directRecipients = data?.directRecipients || [];
+  const domain       = data?.domain       || "your domain";
 
   const totalEmails    = depts.reduce((s, d) => s + Number(d.total_emails), 0);
   const totalAction    = depts.reduce((s, d) => s + Number(d.action_needed), 0);
@@ -89,7 +60,16 @@ export default function Scores() {
 
       {/* View toggle */}
       <div className="flex rounded-lg border border-gray-200 overflow-hidden w-fit">
-        {[["sender", `Team (${domain})`], ["dept", "By Department"]].map(([v, l]) => (
+        {[
+          ...(coordinators.length > 0 ? [["coordinator", "Coordinators"]] : []),
+          // Domain-based "Team" view isn't meaningful for a shared-inbox-only
+          // client like Sariah — coordinators don't have their own @domain
+          // mailboxes, so this stays empty. Only shown when there are no
+          // coordinators to begin with (e.g. POSBank, where it's real).
+          ...(coordinators.length === 0 ? [["sender", `Team (${domain})`]] : []),
+          ["dept", "By Department"],
+          ...(directRecipients.length > 0 ? [["direct", "Direct Recipients"]] : []),
+        ].map(([v, l]) => (
           <button
             key={v}
             onClick={() => setView(v)}
@@ -99,6 +79,52 @@ export default function Scores() {
           </button>
         ))}
       </div>
+
+      {/* Coordinator view — shared-inbox staff identified by signature */}
+      {view === "coordinator" && (
+        <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+          {coordinators.length === 0 ? (
+            <p className="text-center py-10 text-gray-400 text-sm">No coordinator-attributed replies found.</p>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100 bg-gray-50">
+                  <th className="text-left py-3 px-4 text-xs font-semibold text-gray-400 uppercase tracking-wide">Coordinator</th>
+                  <th className="text-left py-3 px-4 text-xs font-semibold text-gray-400 uppercase tracking-wide">Mailbox</th>
+                  <th className="text-right py-3 px-4 text-xs font-semibold text-gray-400 uppercase tracking-wide">Replies Sent</th>
+                  <th className="text-right py-3 px-4 text-xs font-semibold text-gray-400 uppercase tracking-wide">Escalations</th>
+                  <th className="text-right py-3 px-4 text-xs font-semibold text-gray-400 uppercase tracking-wide">Critical</th>
+                  <th className="text-right py-3 px-4 text-xs font-semibold text-gray-400 uppercase tracking-wide">Avg Response Time</th>
+                </tr>
+              </thead>
+              <tbody>
+                {coordinators.map((c) => (
+                  <tr key={c.coordinator} className={`border-b border-gray-50 hover:bg-gray-50 transition-colors ${c.is_unattributed ? "bg-gray-50/60" : ""}`}>
+                    <td className="py-3 px-4">
+                      <p className={c.is_unattributed ? "italic text-gray-500" : "font-medium text-gray-800"}>{c.coordinator}</p>
+                      {c.is_unattributed && (
+                        <p className="text-xs text-gray-400">Real reply sent, but no name in the signature to match</p>
+                      )}
+                      {c.role && <p className="text-xs text-brand">{c.role}</p>}
+                    </td>
+                    <td className="py-3 px-4 text-gray-500 text-xs">{c.mailbox}</td>
+                    <td className="py-3 px-4 text-right text-gray-700 font-medium">{c.replies_sent}</td>
+                    <td className="py-3 px-4 text-right">
+                      <Badge value={c.escalations_handled} color="text-orange-500" />
+                    </td>
+                    <td className="py-3 px-4 text-right">
+                      <Badge value={c.critical_handled} color="text-red-600" />
+                    </td>
+                    <td className="py-3 px-4 text-right">
+                      <ResponseTime hours={c.avg_response_hours} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
 
       {/* Employee view — posbank.in only */}
       {view === "sender" && (
@@ -188,6 +214,49 @@ export default function Scores() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Direct Recipients — Sariah's own list of individual staff mailboxes
+          that need monitoring (Action_Taken_MoM_01-09-2026.pdf, "Email
+          Addresses — Office Staff Attention"). Counts mail where that
+          address is directly in the To: line of a shared-inbox email —
+          distinct from Coordinators (who signed a reply) and Departments
+          (classification-based): this is "how much mail is really meant
+          for this specific person," regardless of who ends up replying. */}
+      {view === "direct" && (
+        <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-100 bg-gray-50">
+                <th className="text-left py-3 px-4 text-xs font-semibold text-gray-400 uppercase tracking-wide">Staff Mailbox</th>
+                <th className="text-right py-3 px-4 text-xs font-semibold text-gray-400 uppercase tracking-wide">Emails</th>
+                <th className="text-right py-3 px-4 text-xs font-semibold text-gray-400 uppercase tracking-wide">Action Needed</th>
+                <th className="text-right py-3 px-4 text-xs font-semibold text-gray-400 uppercase tracking-wide">Escalations</th>
+                <th className="text-right py-3 px-4 text-xs font-semibold text-gray-400 uppercase tracking-wide">Critical</th>
+              </tr>
+            </thead>
+            <tbody>
+              {directRecipients.map((r) => (
+                <tr key={r.address} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
+                  <td className="py-3 px-4 font-medium text-gray-800">{r.address}</td>
+                  <td className="py-3 px-4 text-right text-gray-700 font-medium">{r.total_emails}</td>
+                  <td className="py-3 px-4 text-right">
+                    <Badge value={r.action_needed} color="text-amber-600" />
+                  </td>
+                  <td className="py-3 px-4 text-right">
+                    <Badge value={r.escalations} color="text-orange-500" />
+                  </td>
+                  <td className="py-3 px-4 text-right">
+                    <Badge value={r.critical} color="text-red-600" />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="text-xs text-gray-400 px-4 py-3 border-t border-gray-100">
+            Emails where this address is directly in the To: line of a contactus@/maintenance@ email — per Sariah's own list of staff mailboxes needing attention.
+          </p>
         </div>
       )}
 
